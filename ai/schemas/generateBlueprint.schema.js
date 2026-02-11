@@ -28,7 +28,11 @@ export const generateBlueprintSchema = {
           properties: {
             from: { type: "string" },
             to: { type: "string" },
-            type: { type: "string", enum: ["main", "ai_tool"] }
+            type: {
+              type: "string",
+              enum: ["main", "ai_tool", "ai_agent", "ai_memory", "ai_outputParser", "ai_languageModel", "ai_document", "ai_embedding", "ai_vectorStore", "ai_retriever"],
+              description: "Connection type. Use 'main' for standard connections, 'ai_*' types for AI agent node connections"
+            }
           },
           required: ["from", "to"]
         }

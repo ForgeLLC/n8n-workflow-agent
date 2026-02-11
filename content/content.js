@@ -26,6 +26,170 @@ const Logger = {
 };
 
 // ============================================================================
+// SECURITY: Rate Limiter & Input Validation
+// ============================================================================
+
+const SecurityUtils = {
+  // Rate limiter state
+  lastMessageTime: 0,
+  messageCount: 0,
+  rateLimitWindow: 60000, // 1 minute
+  maxMessagesPerWindow: 30,
+  minMessageInterval: 500, // 500ms between messages
+
+  // Message constraints
+  MAX_MESSAGE_LENGTH: 10000,
+  MIN_MESSAGE_LENGTH: 1,
+
+  // Suspicious pattern detection (prompt injection)
+  SUSPICIOUS_PATTERNS: [
+    /ignore\s+(all\s+)?(previous\s+)?instructions/i,
+    /forget\s+(all\s+)?(previous\s+)?rules/i,
+    /you\s+are\s+now\s+a/i,
+    /new\s+instructions:/i,
+    /system\s*:\s*you/i,
+    /\[INST\]/i,
+    /<<SYS>>/i
+  ],
+
+  /**
+   * Check rate limit
+   * @returns {Object} { allowed: boolean, waitTime: number }
+   */
+  checkRateLimit() {
+    const now = Date.now()
+
+    // Reset counter if window expired
+    if (now - this.lastMessageTime > this.rateLimitWindow) {
+      this.messageCount = 0
+    }
+
+    // Check minimum interval
+    if (now - this.lastMessageTime < this.minMessageInterval) {
+      return {
+        allowed: false,
+        waitTime: this.minMessageInterval - (now - this.lastMessageTime),
+        reason: 'Too fast. Please wait a moment.'
+      }
+    }
+
+    // Check messages per window
+    if (this.messageCount >= this.maxMessagesPerWindow) {
+      const waitTime = this.rateLimitWindow - (now - this.lastMessageTime)
+      return {
+        allowed: false,
+        waitTime,
+        reason: `Rate limit exceeded. Please wait ${Math.ceil(waitTime / 1000)} seconds.`
+      }
+    }
+
+    return { allowed: true }
+  },
+
+  /**
+   * Record a message send
+   */
+  recordMessage() {
+    const now = Date.now()
+    if (now - this.lastMessageTime > this.rateLimitWindow) {
+      this.messageCount = 0
+    }
+    this.lastMessageTime = now
+    this.messageCount++
+  },
+
+  /**
+   * Validate message content
+   * @param {string} message
+   * @returns {Object} { valid: boolean, reason: string }
+   */
+  validateMessage(message) {
+    if (!message || typeof message !== 'string') {
+      return { valid: false, reason: 'Invalid message format' }
+    }
+
+    if (message.length < this.MIN_MESSAGE_LENGTH) {
+      return { valid: false, reason: 'Message is too short' }
+    }
+
+    if (message.length > this.MAX_MESSAGE_LENGTH) {
+      return { valid: false, reason: `Message is too long (max ${this.MAX_MESSAGE_LENGTH} characters)` }
+    }
+
+    // Check for suspicious patterns (warning only, don't block)
+    for (const pattern of this.SUSPICIOUS_PATTERNS) {
+      if (pattern.test(message)) {
+        Logger.warn('Potential prompt injection pattern detected')
+        // Don't block, just log for now
+        break
+      }
+    }
+
+    return { valid: true }
+  },
+
+  /**
+   * Sanitize HTML content to prevent XSS
+   * Allows safe HTML tags for markdown rendering while removing dangerous ones
+   * @param {string} html - HTML string to sanitize
+   * @returns {string} - Sanitized HTML
+   */
+  sanitizeHTML(html) {
+    if (!html || typeof html !== 'string') return ''
+
+    // Create a temporary element
+    const temp = document.createElement('div')
+    temp.textContent = html // This escapes all HTML
+
+    // For markdown-like content, we need to allow some safe tags
+    // Parse the escaped content and selectively allow safe formatting
+    let sanitized = temp.innerHTML
+
+    // Allow safe inline formatting (already escaped, so we convert back)
+    // Code blocks
+    sanitized = sanitized.replace(/&lt;code&gt;(.*?)&lt;\/code&gt;/gi, '<code>$1</code>')
+    sanitized = sanitized.replace(/&lt;pre&gt;(.*?)&lt;\/pre&gt;/gis, '<pre>$1</pre>')
+
+    // Text formatting
+    sanitized = sanitized.replace(/&lt;strong&gt;(.*?)&lt;\/strong&gt;/gi, '<strong>$1</strong>')
+    sanitized = sanitized.replace(/&lt;b&gt;(.*?)&lt;\/b&gt;/gi, '<b>$1</b>')
+    sanitized = sanitized.replace(/&lt;em&gt;(.*?)&lt;\/em&gt;/gi, '<em>$1</em>')
+    sanitized = sanitized.replace(/&lt;i&gt;(.*?)&lt;\/i&gt;/gi, '<i>$1</i>')
+
+    // Lists
+    sanitized = sanitized.replace(/&lt;ul&gt;/gi, '<ul>')
+    sanitized = sanitized.replace(/&lt;\/ul&gt;/gi, '</ul>')
+    sanitized = sanitized.replace(/&lt;ol&gt;/gi, '<ol>')
+    sanitized = sanitized.replace(/&lt;\/ol&gt;/gi, '</ol>')
+    sanitized = sanitized.replace(/&lt;li&gt;(.*?)&lt;\/li&gt;/gi, '<li>$1</li>')
+
+    // Paragraphs and breaks
+    sanitized = sanitized.replace(/&lt;p&gt;(.*?)&lt;\/p&gt;/gis, '<p>$1</p>')
+    sanitized = sanitized.replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+
+    // Headings
+    sanitized = sanitized.replace(/&lt;h([1-6])&gt;(.*?)&lt;\/h\1&gt;/gi, '<h$1>$2</h$1>')
+
+    // Blockquotes
+    sanitized = sanitized.replace(/&lt;blockquote&gt;(.*?)&lt;\/blockquote&gt;/gis, '<blockquote>$1</blockquote>')
+
+    return sanitized
+  },
+
+  /**
+   * Escape HTML special characters (for user content)
+   * @param {string} str - String to escape
+   * @returns {string} - Escaped string
+   */
+  escapeHTML(str) {
+    if (!str || typeof str !== 'string') return ''
+    const div = document.createElement('div')
+    div.textContent = str
+    return div.innerHTML
+  }
+}
+
+// ============================================================================
 // DEBUG API - Enhanced Logging & Tracking System
 // ============================================================================
 
@@ -1190,7 +1354,7 @@ const generateWorkflowDocsFunction = {
   },
 }
 
-function getFunctionsForAI(settings) {
+function getFunctionsForAI(settings, chatMode = "simple") {
   const enabledFunctions = []
   if (settings.workflowAccess !== false) {
     enabledFunctions.push(getWorkflowInfoFunction, getNodeInfoFunction)
@@ -1219,7 +1383,11 @@ function getFunctionsForAI(settings) {
   enabledFunctions.push(validateConnectionFunction)
   
   // TIER 1 ENHANCEMENTS: Advanced workflow operations
-  enabledFunctions.push(bulkCreateNodesFunction)
+  // Only include bulk_create_nodes in multi-agent mode
+  // Simple mode should use create_node one by one
+  if (chatMode === "multi-agent") {
+    enabledFunctions.push(bulkCreateNodesFunction)
+  }
   enabledFunctions.push(bulkDeleteNodesFunction)
   enabledFunctions.push(autoPositionNodeFunction)
   enabledFunctions.push(getExecutionResultsFunction)
@@ -2043,28 +2211,48 @@ async function waitForN8nVueApp(timeout = 10000) {
   // First ensure injected script is loaded
   const injectedReady = await waitForInjectedScript();
   if (!injectedReady) {
-    Logger.error('Injected script failed to load');
-    return false;
+    Logger.warn('⚠ Injected script not ready, continuing anyway...');
+    // Don't fail completely - continue without injected script check
   }
 
   const startTime = Date.now();
   
   while (Date.now() - startTime < timeout) {
     try {
-      const result = await callInjected('check_ready', {}, 1000);
-      if (result && result.success && result.details.hasApp) {
+      // Check if extension context is still valid
+      if (!chrome.runtime || !chrome.runtime.id) {
+        Logger.warn('⚠ Extension context invalidated during wait');
+        return false;
+      }
+      
+      // Use shorter timeout for check_ready to avoid blocking
+      const result = await callInjected('check_ready', {}, 2500);
+      if (result && result.success && result.details && result.details.hasApp) {
         Logger.success('✓ n8n App is ready and connected!');
         return true;
       }
     } catch (e) {
-      // ignore errors during check
+      // Check if it's a context invalidated error
+      if (e.message && (e.message.includes('Extension context invalidated') || e.message.includes('context invalidated'))) {
+        Logger.warn('⚠ Extension context invalidated');
+        return false;
+      }
+      // Check if it's a timeout - that's OK, we'll retry
+      if (e.message && e.message.includes('Timeout')) {
+        // Continue waiting
+        Logger.debug('check_ready timeout, retrying...');
+      } else {
+        // Other errors - log but continue
+        Logger.debug('check_ready error:', e.message);
+      }
     }
     
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   
-  Logger.warn('⚠ Timeout waiting for n8n App');
-  return false;
+  Logger.warn('⚠ Timeout waiting for n8n App - continuing anyway');
+  // Don't fail completely - return true to allow chat to work
+  return true;
 }
 
 // Initialize chat UI
@@ -2133,7 +2321,7 @@ async function initializeChatUI() {
     
     /* ===== MODERN HEADER WITH ANIMATED GRADIENT ===== */
     #n8n-chat-header {
-      padding: 20px 24px;
+      padding: 16px 20px;
       background: linear-gradient(135deg, 
         rgba(0, 255, 71, 0.12) 0%, 
         rgba(0, 212, 255, 0.08) 50%,
@@ -2145,6 +2333,7 @@ async function initializeChatUI() {
       align-items: center;
       position: relative;
       overflow: hidden;
+      gap: 12px;
     }
     
     #n8n-chat-header::before {
@@ -2168,7 +2357,7 @@ async function initializeChatUI() {
     
     #n8n-chat-header h3 {
       margin: 0;
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 800;
       background: linear-gradient(135deg, #00ff47 0%, #00d4ff 60%, #00ff47 100%);
       background-size: 200% auto;
@@ -2177,11 +2366,13 @@ async function initializeChatUI() {
       background-clip: text;
       display: flex;
       align-items: center;
-      gap: 12px;
-      letter-spacing: -0.8px;
+      gap: 10px;
+      letter-spacing: -0.6px;
       position: relative;
       z-index: 1;
       animation: gradientShift 3s ease infinite;
+      flex: 1;
+      min-width: 0;
     }
     
     @keyframes gradientShift {
@@ -2208,28 +2399,72 @@ async function initializeChatUI() {
     
     .n8n-chat-header-actions {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
       position: relative;
       z-index: 1;
+      flex-shrink: 0;
+    }
+    
+    .n8n-chat-mode-select {
+      padding: 6px 10px;
+      padding-right: 24px;
+      background: rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 4L6 8L10 4' stroke='rgba(255,255,255,0.6)' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      background-size: 12px;
+      min-width: 100px;
+      height: 32px;
+      line-height: 20px;
+    }
+    
+    .n8n-chat-mode-select:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+      border-color: rgba(0, 255, 71, 0.3);
+    }
+    
+    .n8n-chat-mode-select:focus {
+      border-color: rgba(0, 255, 71, 0.5);
+      box-shadow: 0 0 0 2px rgba(0, 255, 71, 0.1);
+      outline: none;
+    }
+    
+    .n8n-chat-mode-select option {
+      background: rgba(15, 15, 25, 0.98);
+      color: rgba(255, 255, 255, 0.9);
+      padding: 8px;
     }
     
     .n8n-chat-action-btn {
-      width: 38px;
-      height: 38px;
+      width: 32px;
+      height: 32px;
       display: flex;
       align-items: center;
       justify-content: center;
       background: rgba(255, 255, 255, 0.04);
       backdrop-filter: blur(10px);
       border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 12px;
+      border-radius: 8px;
       cursor: pointer;
       color: rgba(255, 255, 255, 0.5);
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       padding: 0;
       position: relative;
       overflow: hidden;
+      flex-shrink: 0;
     }
     
     .n8n-chat-action-btn::before {
@@ -2263,10 +2498,16 @@ async function initializeChatUI() {
     }
     
     .n8n-chat-action-btn svg {
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       position: relative;
       z-index: 1;
+    }
+    
+    .n8n-chat-action-btn:last-child {
+      font-size: 20px;
+      font-weight: 300;
+      line-height: 1;
     }
     
     #n8n-chat-close {
@@ -2766,6 +3007,45 @@ async function initializeChatUI() {
       pointer-events: none;
       z-index: 1;
     }
+    
+    /* ===== COORDINATION LOG ===== */
+    .n8n-chat-coordination-log {
+      padding: 12px 16px;
+      background: rgba(0, 255, 71, 0.05);
+      border-bottom: 1px solid rgba(0, 255, 71, 0.2);
+      border-top: 1px solid rgba(0, 255, 71, 0.2);
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.8);
+      max-height: 200px;
+      overflow-y: auto;
+      display: none;
+    }
+    
+    .coordination-log-entry {
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    }
+    
+    .coordination-log-entry:last-child {
+      border-bottom: none;
+    }
+    
+    .coordination-log-discovery {
+      color: #88ccff;
+    }
+    
+    .coordination-log-builder {
+      color: #ffaa00;
+    }
+    
+    .coordination-log-configurator {
+      color: #00ff47;
+    }
+    
+    .coordination-log-responder {
+      color: #ff6b9d;
+    }
   `
   document.head.appendChild(style)
 
@@ -2780,17 +3060,21 @@ async function initializeChatUI() {
       <span>n8n Chat</span>
     </h3>
     <div class="n8n-chat-header-actions">
+      <select id="n8n-chat-mode" class="n8n-chat-mode-select" title="Chat Mode">
+        <option value="simple">Simple Mode</option>
+        <option value="multi-agent">Multi-Agent Mode (n8n AI)</option>
+      </select>
       <button id="n8n-chat-new" class="n8n-chat-action-btn" title="Yeni Chat">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </button>
-      <button id="n8n-chat-clear" class="n8n-chat-action-btn" title="${chrome.i18n.getMessage("clearMessages") || "Clear Messages"}">
+      <button id="n8n-chat-clear" class="n8n-chat-action-btn" title="${(chrome.i18n && chrome.i18n.getMessage ? chrome.i18n.getMessage("clearMessages") : null) || "Clear Messages"}">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M3 4H13M5 4V3C5 2.4 5.4 2 6 2H10C10.6 2 11 2.4 11 3V4M6 7V11M10 7V11M4 4L5 13C5 13.6 5.4 14 6 14H10C10.6 14 11 13.6 11 13L12 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
-      <button id="n8n-chat-close" class="n8n-chat-action-btn" title="${chrome.i18n.getMessage("close") || "Close"}">×</button>
+      <button id="n8n-chat-close" class="n8n-chat-action-btn" title="${(chrome.i18n && chrome.i18n.getMessage ? chrome.i18n.getMessage("close") : null) || "Close"}">×</button>
     </div>
   `
 
@@ -2800,8 +3084,8 @@ async function initializeChatUI() {
   const inputArea = document.createElement("div")
   inputArea.id = "n8n-chat-input-area"
   inputArea.innerHTML = `
-    <input type="text" id="n8n-chat-input" placeholder="${chrome.i18n.getMessage("askAnything") || "Ask me anything about your workflow..."}" autocomplete="off">
-    <button id="n8n-chat-send">${chrome.i18n.getMessage("send") || "Send"}</button>
+    <input type="text" id="n8n-chat-input" placeholder="${(chrome.i18n && chrome.i18n.getMessage ? chrome.i18n.getMessage("askAnything") : null) || "Ask me anything about your workflow..."}" autocomplete="off">
+    <button id="n8n-chat-send">${(chrome.i18n && chrome.i18n.getMessage ? chrome.i18n.getMessage("send") : null) || "Send"}</button>
   `
 
   container.appendChild(header)
@@ -2848,7 +3132,20 @@ async function initializeChatUI() {
   const clearChatBtn = document.getElementById("n8n-chat-clear")
   if (clearChatBtn) {
     clearChatBtn.addEventListener("click", async () => {
-      const confirmed = confirm(chrome.i18n.getMessage("clearMessagesConfirm") || "Are you sure you want to delete all messages?")
+      // Check if extension context is valid before using chrome APIs
+      let confirmMessage = "Are you sure you want to delete all messages?"
+      try {
+        if (chrome.runtime && chrome.runtime.id && chrome.i18n) {
+          const i18nMessage = chrome.i18n.getMessage("clearMessagesConfirm")
+          if (i18nMessage) {
+            confirmMessage = i18nMessage
+          }
+        }
+      } catch (e) {
+        // Extension context invalidated, use default message
+        console.warn("[n8nChat] Extension context invalidated, using default message")
+      }
+      const confirmed = confirm(confirmMessage)
       if (confirmed) {
         // Clear messages UI
         const messagesArea = document.getElementById("n8n-chat-messages")
@@ -2904,14 +3201,165 @@ async function initializeChatUI() {
   await restoreChatHistory()
 }
 
+// Handle multi-agent mode
+async function handleMultiAgentMode(message, settings, workflowContext) {
+  try {
+    // Get workflow ID from URL or generate one
+    const url = window.location.href
+    const workflowIdMatch = url.match(/\/workflow\/([^\/\?]+)/)
+    const workflowId = workflowIdMatch ? workflowIdMatch[1] : `workflow_${Date.now()}`
+    
+    // Connect to background worker
+    const port = chrome.runtime.connect({ name: "workflowBuilderStream" })
+    const requestId = `wf_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    
+    // Show coordination log area
+    showCoordinationLog()
+    
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "start") {
+        addMessage("assistant", "🚀 Multi-agent workflow building başlatılıyor...")
+      } else if (msg.type === "event") {
+        const event = msg.event
+        if (event.type === "phase_start") {
+          updateCoordinationLog(event.phase, "started", "")
+          // Don't add message for every phase start to avoid spam
+          if (event.phase === "responder") {
+            addMessage("assistant", "💬 Yanıt hazırlanıyor...")
+          }
+        } else if (event.type === "phase_complete") {
+          updateCoordinationLog(event.phase, "completed", event.result || event.response || "")
+          // Only show responder response to user
+          if (event.phase === "responder") {
+            const response = event.response || event.result?.response || event.result
+            if (response) {
+              // Remove thinking indicator before showing response
+              removeThinking()
+              addMessage("assistant", typeof response === 'string' ? response : JSON.stringify(response))
+            }
+          }
+        } else if (event.type === "phase_error") {
+          updateCoordinationLog(event.phase, "error", event.error)
+          removeThinking()
+          addMessage("assistant", `❌ Hata (${event.phase}): ${event.error}`)
+        } else if (event.type === "complete") {
+          updateCoordinationLog("complete", "completed", "Workflow building tamamlandı")
+          removeThinking()
+          // Don't add duplicate message if responder already sent response
+        }
+      } else if (msg.type === "data") {
+        if (msg.data.phase) {
+          updateCoordinationLog(msg.data.phase, "processing", msg.data.message || "")
+        }
+        // Show data messages for responder phase
+        if (msg.data.phase === "responder" && msg.data.message) {
+          // Don't spam, only update if it's important
+        }
+      } else if (msg.type === "error") {
+        removeThinking()
+        addMessage("assistant", `❌ Hata: ${msg.error}`)
+        updateCoordinationLog("error", "error", msg.error)
+      } else if (msg.type === "end") {
+        removeThinking()
+        hideCoordinationLog()
+      }
+    })
+    
+    port.onDisconnect.addListener(() => {
+      hideCoordinationLog()
+    })
+    
+    // Send request
+    port.postMessage({
+      body: {
+        message,
+        workflowId,
+        workflowContext: workflowContext || {},
+        settings,
+        requestId
+      }
+    })
+    
+  } catch (error) {
+    Logger.error("[MultiAgentMode] Error:", error)
+    addMessage("assistant", `❌ Hata: ${error.message}`)
+  }
+}
+
+// Show coordination log
+function showCoordinationLog() {
+  let logArea = document.getElementById("n8n-chat-coordination-log")
+  if (!logArea) {
+    logArea = document.createElement("div")
+    logArea.id = "n8n-chat-coordination-log"
+    logArea.className = "n8n-chat-coordination-log"
+    const messagesArea = document.getElementById("n8n-chat-messages")
+    if (messagesArea) {
+      messagesArea.parentNode.insertBefore(logArea, messagesArea)
+    }
+  }
+  logArea.style.display = "block"
+}
+
+// Hide coordination log
+function hideCoordinationLog() {
+  const logArea = document.getElementById("n8n-chat-coordination-log")
+  if (logArea) {
+    logArea.style.display = "none"
+  }
+}
+
+// Update coordination log
+function updateCoordinationLog(phase, status, message) {
+  const logArea = document.getElementById("n8n-chat-coordination-log")
+  if (!logArea) return
+  
+  const phaseNames = {
+    discovery: "🔍 Discovery",
+    builder: "🔨 Builder",
+    configurator: "⚙️ Configurator",
+    responder: "💬 Responder"
+  }
+  
+  const phaseName = phaseNames[phase] || phase
+  const statusIcon = status === "completed" ? "✅" : status === "error" ? "❌" : "⏳"
+  
+  let entry = logArea.querySelector(`[data-phase="${phase}"]`)
+  if (!entry) {
+    entry = document.createElement("div")
+    entry.className = `coordination-log-entry coordination-log-${phase}`
+    entry.setAttribute("data-phase", phase)
+    logArea.appendChild(entry)
+  }
+  
+  entry.innerHTML = `${statusIcon} ${phaseName}: ${message || status}`
+}
+
 // Handle send message
 async function handleSendMessage() {
   const input = document.getElementById("n8n-chat-input")
   const sendBtn = document.getElementById("n8n-chat-send")
   if (!input) return
-  
+
   const message = input.value.trim()
   if (!message) return
+
+  // SECURITY: Rate limit check
+  const rateLimitCheck = SecurityUtils.checkRateLimit()
+  if (!rateLimitCheck.allowed) {
+    addMessage("assistant", `⚠️ ${rateLimitCheck.reason}`)
+    return
+  }
+
+  // SECURITY: Validate message content
+  const validation = SecurityUtils.validateMessage(message)
+  if (!validation.valid) {
+    addMessage("assistant", `⚠️ ${validation.reason}`)
+    return
+  }
+
+  // Record message for rate limiting
+  SecurityUtils.recordMessage()
 
   // Disable input and button
   input.disabled = true
@@ -3099,6 +3547,38 @@ async function handleSendMessage() {
      // We verify validity in background, but basic empty check here is fine
   }
 
+  // Check chat mode
+  const modeSelect = document.getElementById("n8n-chat-mode")
+  const chatMode = modeSelect ? modeSelect.value : "simple"
+  
+  // Multi-agent mode uses workflow builder
+  if (chatMode === "multi-agent") {
+    // Get workflow context if available
+    let workflowContext = {}
+    try {
+      const workflowInfo = await callInjected('get_workflow_info', { includeNodes: true, includeConnections: true })
+      if (workflowInfo && workflowInfo.data) {
+        workflowContext = {
+          currentWorkflow: workflowInfo.data,
+          executionSchema: workflowInfo.data.nodes?.map(n => ({
+            nodeName: n.name,
+            nodeType: n.type,
+            outputs: n.outputs || []
+          })) || []
+        }
+      }
+    } catch (error) {
+      Logger.warn("[MultiAgentMode] Failed to get workflow context:", error)
+    }
+    
+    await handleMultiAgentMode(message, effectiveSettings, workflowContext)
+    input.disabled = false
+    if (sendBtn) sendBtn.disabled = false
+    removeThinking()
+    return
+  }
+  
+  // Simple mode (existing behavior)
   let portName = "geminiStream"
   if (effectiveSettings.provider === "google") portName = "geminiStream"
   else if (effectiveSettings.provider === "openai") portName = "openaiStream"
@@ -3112,7 +3592,7 @@ async function handleSendMessage() {
 
   // Check extension context before connecting
   if (!chrome.runtime || !chrome.runtime.id) {
-    hideThinking()
+    removeThinking()
     addMessage("assistant", "Hata: Extension context invalidated. Lütfen sayfayı yenileyin (F5).")
     input.disabled = false
     if (sendBtn) sendBtn.disabled = false
@@ -3189,12 +3669,11 @@ User: "Replace Google Sheets with Supabase"
 
 You MUST:
 - Step 1: get_workflow_info
-- Step 2: bulk_delete_nodes (Google Sheets)
-- Step 3: bulk_create_nodes (Supabase)
-- Step 4: add_connection (re-wire logic)
-- Step 5: auto_position_node OR fit_view_to_workflow
-- Step 6: validate_workflow
-- Step 7: Confirm completion
+- Step 2: remove_node (Google Sheets nodes one by one)
+- Step 3: create_node (Supabase node 1) → add_connection → create_node (Supabase node 2) → add_connection (repeat for all nodes)
+- Step 4: auto_position_node OR fit_view_to_workflow
+- Step 5: validate_workflow
+- Step 6: Confirm completion
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔗 CONNECTION MANAGEMENT (ULTRA-CRITICAL)
@@ -3202,12 +3681,13 @@ You MUST:
 EVERY created node MUST be connected.
 
 Rules:
-- After create_node or bulk_create_nodes → IMMEDIATELY call add_connection
+- After EACH create_node → IMMEDIATELY call add_connection for that node
 - NEVER leave floating or orphan nodes
 - Use EXACT node names returned by creation functions
 - Logical flow is MANDATORY:
   Trigger → Processing → AI / Logic → Storage / Output
 - If a node has multiple outputs, connect ALL relevant paths
+- Workflow: create_node → add_connection → create_node → add_connection (repeat)
 
 🚫 An unconnected node = broken workflow = FAILURE.
 
@@ -3216,8 +3696,8 @@ Rules:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - DO NOT use generate_workflow_blueprint
 - DO NOT describe workflows in text instead of building them
-- ALWAYS use create_node or bulk_create_nodes
-- ALWAYS connect nodes with add_connection
+- ALWAYS use create_node (ONE node at a time, NOT bulk_create_nodes)
+- After EACH create_node, IMMEDIATELY connect with add_connection
 - ALWAYS clean layout (auto_position_node or fit_view_to_workflow)
 - ALWAYS validate with validate_workflow
 - NEVER stop mid-process
@@ -3227,8 +3707,8 @@ Rules:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Analyze user intent
 2. Resolve correct node types (2026-compatible)
-3. Create ALL required nodes (bulk_create_nodes preferred)
-4. Connect ALL nodes immediately
+3. Create ALL required nodes ONE BY ONE using create_node (NOT bulk_create_nodes)
+4. Connect each node immediately after creation with add_connection
 5. Clean and align canvas
 6. Validate workflow
 7. Confirm success
@@ -3604,6 +4084,28 @@ Every blueprint you generate must be:
 ✔ Ready for agentic execution`
     });
   } else {
+    // Detect user message language
+    const detectLanguage = (text) => {
+      const lowerText = text.toLowerCase()
+      // Turkish indicators
+      if (/\b(ve|ile|için|bir|bu|şu|o|de|da|ki|mi|mı|mu|mü|var|yok|olur|olur|yap|et|gönder|al|getir|oluştur|ekle|sil|değiştir|türkçe|türk)\b/i.test(lowerText)) {
+        return 'Turkish'
+      }
+      // Spanish indicators
+      if (/\b(y|o|a|de|el|la|los|las|un|una|con|por|para|que|es|son|está|están|hacer|crear|enviar|obtener|ahora|mismo|completo|workflow|nodos)\b/i.test(lowerText)) {
+        return 'Spanish'
+      }
+      // Default to English
+      return 'English'
+    }
+    
+    const userLanguage = detectLanguage(message)
+    const languageDirective = userLanguage === 'Turkish' 
+      ? 'CRITICAL: The user is writing in TURKISH. You MUST respond in TURKISH. All your responses, explanations, confirmations, and error messages MUST be in TURKISH.'
+      : userLanguage === 'Spanish'
+      ? 'CRITICAL: The user is writing in SPANISH. You MUST respond in SPANISH. All your responses, explanations, confirmations, and error messages MUST be in SPANISH.'
+      : 'CRITICAL: The user is writing in ENGLISH. You MUST respond in ENGLISH. All your responses, explanations, confirmations, and error messages MUST be in ENGLISH.'
+    
     // Default Architect Prompt (Enhanced with connection & language consistency)
     messages.push({
       role: "system",
@@ -3615,6 +4117,13 @@ AI-powered, scalable, and reusable automation systems (2026 standard).
 
 You operate at ARCHITECTURE level, not task level.
 Your output quality must MATCH or EXCEED official n8n Template Marketplace standards.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌍 LANGUAGE REQUIREMENT (CRITICAL - HIGHEST PRIORITY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${languageDirective}
+
+This is NON-NEGOTIABLE. You MUST match the user's language exactly.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 PRIMARY MISSION
@@ -3949,10 +4458,11 @@ EXISTING WORKFLOW CONTEXT:
 ${JSON.stringify(workflowContext, null, 2)}
 
 INSTRUCTIONS:
-1. Use bulk_create_nodes to create multiple nodes at once
-2. Each node needs: name, type (e.g., "n8n-nodes-base.telegram"), position {x, y}, parameters
-3. After creating nodes, use auto_position_node or fit_view_to_workflow for layout
-4. DO NOT use generate_workflow_blueprint - CREATE actual nodes!
+1. Use create_node to create nodes ONE BY ONE (NOT bulk_create_nodes)
+2. After EACH create_node, IMMEDIATELY call add_connection to connect it
+3. Each node needs: name, type (e.g., "n8n-nodes-base.telegram"), position {x, y}, parameters
+4. After all nodes are created and connected, use auto_position_node or fit_view_to_workflow for layout
+5. DO NOT use generate_workflow_blueprint - CREATE actual nodes!
 
 User's request will follow.`
           });
@@ -3986,7 +4496,7 @@ Return ONLY the generate_workflow_blueprint function call with a complete plan.`
       messages.push({ role: "user", content: message })
   }
 
-  const tools = getFunctionsForAI(effectiveSettings)
+  const tools = getFunctionsForAI(effectiveSettings, chatMode)
   
   // Add Analysis Tool if request is analysis
   if (isAnalysisRequest) {
@@ -4076,7 +4586,7 @@ Return ONLY the generate_workflow_blueprint function call with a complete plan.`
       }
     });
   }
-  const supportsFunctionCalling = ["google", "openai", "anthropic", "deepseek", "openrouter", "groq"].includes(effectiveSettings.provider)
+  const supportsFunctionCalling = ["google", "openai", "anthropic", "deepseek", "openrouter", "groq", "huggingface"].includes(effectiveSettings.provider)
 
   let requestBody = {}
   
@@ -4169,7 +4679,7 @@ Return ONLY the generate_workflow_blueprint function call with a complete plan.`
         resultMessage += `\n\n✅ NEXT STEP: Verify that the workflow connections are still intact after deletion.`;
       } else if (functionName === 'get_workflow_info') {
         // After getting workflow info, provide clear next step guidance
-        resultMessage += `\n\n📋 NEXT STEP: Based on this workflow information, proceed with the user's request. If creating nodes, use bulk_create_nodes. If analyzing, provide insights. If modifying, identify what needs to change.`;
+        resultMessage += `\n\n📋 NEXT STEP: Based on this workflow information, proceed with the user's request. If creating nodes, use create_node ONE BY ONE (NOT bulk_create_nodes), and connect each node immediately with add_connection. If analyzing, provide insights. If modifying, identify what needs to change.`;
       }
       
       // OpenAI/Anthropic/DeepSeek/OpenRouter use "tool" role
@@ -4258,6 +4768,7 @@ Return ONLY the generate_workflow_blueprint function call with a complete plan.`
         functionCallCount++
         Logger.log(`[n8nChat] Function call #${functionCallCount}:`, msg)
         
+        // ✅ FIX: Unified function call parsing logic
         const functionCall = {
           name: msg.functionName || msg.name,
           arguments: msg.arguments || msg.args || msg.data?.args || msg.data?.argumentsString || "{}",
@@ -4265,15 +4776,20 @@ Return ONLY the generate_workflow_blueprint function call with a complete plan.`
         
         Logger.log('[n8nChat] Parsed function call:', functionCall)
         
-        // 🐛 DEBUG API: Log function call
+        // ✅ FIX: Robust argument parsing with error handling
+        let parsedArgs;
         try {
-          const parsedArgs = typeof functionCall.arguments === 'string' 
-            ? JSON.parse(functionCall.arguments) 
-            : functionCall.arguments;
-          debugAPI.logFunctionCall(operationId, functionCall.name, parsedArgs);
-        } catch (e) {
-          debugAPI.logFunctionCall(operationId, functionCall.name, functionCall.arguments);
+          parsedArgs = typeof functionCall.arguments === 'string'
+            ? JSON.parse(functionCall.arguments)
+            : (functionCall.arguments || {});
+        } catch (parseError) {
+          Logger.error('Failed to parse function arguments:', parseError);
+          Logger.warn('Raw arguments:', functionCall.arguments);
+          parsedArgs = {}; // Fallback to empty object
         }
+        
+        // 🐛 DEBUG API: Log function call
+        debugAPI.logFunctionCall(operationId, functionCall.name, parsedArgs);
         
         try {
           const result = await executeFunction(functionCall)
@@ -4489,9 +5005,12 @@ function addMessage(role, content, options = {}) {
   messageDiv.className = `n8n-chat-message n8n-chat-${role}`
   messageDiv.dataset.time = currentTime;
   
-  // Enhanced markdown support
+  // Enhanced markdown support with XSS protection
   if (role === "assistant") {
-    let formattedContent = content
+    // SECURITY: First escape HTML entities to prevent XSS
+    let safeContent = SecurityUtils.escapeHTML(content)
+
+    let formattedContent = safeContent
       // Code blocks
       .replace(/```(.*?)```/gs, '<pre style="background: rgba(0, 0, 0, 0.5); padding: 12px; border-radius: 10px; overflow-x: auto; border-left: 3px solid #00ff47; margin: 8px 0;"><code>$1</code></pre>')
       // Inline code
@@ -4500,28 +5019,31 @@ function addMessage(role, content, options = {}) {
       .replace(/\*\*(.*?)\*\*/g, '<strong style="color: #00ff47; font-weight: 800; text-shadow: 0 0 8px rgba(0, 255, 71, 0.3);">$1</strong>')
       // Italic
       .replace(/\*(.*?)\*/g, '<em style="color: rgba(255, 255, 255, 0.85);">$1</em>')
-      // Links
-      .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" style="color: #00d4ff; text-decoration: underline; font-weight: 600;">$1</a>')
+      // Links - SECURITY: Only allow http/https URLs, block javascript:
+      .replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #00d4ff; text-decoration: underline; font-weight: 600;">$1</a>')
       // Newlines
       .replace(/\n/g, '<br>')
-    
+
     messageDiv.innerHTML = formattedContent;
   } else if (role === "system") {
-    // System messages with icons
+    // System messages with icons - SECURITY: Escape content first
+    const safeContent = SecurityUtils.escapeHTML(content)
     const iconMap = {
       '✅': '<span style="font-size: 16px; margin-right: 2px;">✅</span>',
       '❌': '<span style="font-size: 16px; margin-right: 2px;">❌</span>',
       '⚠️': '<span style="font-size: 16px; margin-right: 2px;">⚠️</span>',
     };
-    
-    let displayContent = content;
+
+    let displayContent = safeContent;
     for (const [emoji, html] of Object.entries(iconMap)) {
+      // Check original content for emoji, use escaped for display
       if (content.startsWith(emoji)) {
-        displayContent = html + content.substring(emoji.length);
+        const escapedRest = SecurityUtils.escapeHTML(content.substring(emoji.length))
+        displayContent = html + escapedRest;
         break;
       }
     }
-    
+
     messageDiv.innerHTML = displayContent;
   } else {
     messageDiv.textContent = content;
@@ -4613,15 +5135,19 @@ function updateLastMessage(role, content) {
   
   if (lastMessage) {
     if (role === "assistant") {
-      // Enhanced markdown support (same as addMessage)
-      let formattedContent = content
+      // Enhanced markdown support with XSS protection (same as addMessage)
+      // SECURITY: First escape HTML entities to prevent XSS
+      let safeContent = SecurityUtils.escapeHTML(content)
+
+      let formattedContent = safeContent
         .replace(/```(.*?)```/gs, '<pre style="background: rgba(0, 0, 0, 0.5); padding: 12px; border-radius: 10px; overflow-x: auto; border-left: 3px solid #00ff47; margin: 8px 0;"><code>$1</code></pre>')
         .replace(/`(.*?)`/g, '<code style="background: rgba(0, 0, 0, 0.5); padding: 3px 8px; border-radius: 6px; font-family: \'SF Mono\', Monaco, Consolas, monospace; font-size: 13px; border: 1px solid rgba(0, 255, 71, 0.25); color: #00ff47; font-weight: 500;">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong style="color: #00ff47; font-weight: 800; text-shadow: 0 0 8px rgba(0, 255, 71, 0.3);">$1</strong>')
         .replace(/\*(.*?)\*/g, '<em style="color: rgba(255, 255, 255, 0.85);">$1</em>')
-        .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" style="color: #00d4ff; text-decoration: underline; font-weight: 600;">$1</a>')
+        // SECURITY: Only allow http/https URLs, block javascript:
+        .replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #00d4ff; text-decoration: underline; font-weight: 600;">$1</a>')
         .replace(/\n/g, '<br>')
-      
+
       lastMessage.innerHTML = formattedContent
     } else {
       lastMessage.textContent = content
@@ -4661,7 +5187,7 @@ function showThinking() {
   const thinkingDiv = document.createElement("div")
   thinkingDiv.id = "n8n-chat-thinking"
   thinkingDiv.className = "n8n-chat-message n8n-chat-assistant n8n-chat-thinking"
-  thinkingDiv.textContent = chrome.i18n.getMessage("thinking") || "Thinking"
+  thinkingDiv.textContent = (chrome.i18n && chrome.i18n.getMessage ? chrome.i18n.getMessage("thinking") : null) || "Thinking"
   
   thinkingWrapper.appendChild(thinkingDiv);
   messagesArea.appendChild(thinkingWrapper);
@@ -4836,6 +5362,67 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     debugAPI.clear()
     sendResponse({ success: true })
     return true
+  }
+  
+  // Handle function execution from workflow builder
+  if (message.type === "n8nChatExecuteFunction") {
+    const { functionName, args, requestId } = message
+    
+    // Execute function - use executeFunction (from executor.js) for multi-agent mode
+    // This handles search_nodes, add_connection, and other executor functions
+    const executeFunctionCall = async () => {
+      // Check if function exists in executor.js
+      const executorFunctions = [
+        'create_node', 'update_node', 'remove_node', 'add_connection', 'remove_connection',
+        'get_workflow_info', 'get_node_info', 'clone_node',
+        'search_nodes', 'get_node_schema', 'find_node_by_intent',
+        'get_node_credentials', 'get_credential_details', 'get_credential_usage_examples',
+        'bulk_create_nodes', 'bulk_update_nodes', 'bulk_disable_nodes',
+        'auto_arrange_nodes', 'validate_workflow', 'test_workflow',
+        'get_workflow_variables', 'export_workflow'
+      ]
+      
+      if (executorFunctions.includes(functionName)) {
+        // Use executeFunction (already available in content.js scope)
+        try {
+          const result = await executeFunction({
+            name: functionName,
+            arguments: args || {}
+          })
+          Logger.log(`[MultiAgent] Executed ${functionName} via executor`)
+          return result
+        } catch (execError) {
+          Logger.error(`[MultiAgent] Error executing ${functionName} via executor:`, execError)
+          throw execError
+        }
+      } else {
+        // Fallback to injected script for other functions
+        Logger.log(`[MultiAgent] Function ${functionName} not in executor, using injected script`)
+        return await callInjected(functionName, args || {})
+      }
+    }
+    
+    executeFunctionCall()
+      .then((result) => {
+        // Send result back to background worker
+        chrome.runtime.sendMessage({
+          type: 'n8nChatFunctionResult',
+          requestId: requestId,
+          result: result
+        })
+        sendResponse({ success: true, result: result })
+      })
+      .catch((error) => {
+        Logger.error(`[MultiAgent] Error executing function ${functionName}:`, error)
+        chrome.runtime.sendMessage({
+          type: 'n8nChatFunctionResult',
+          requestId: requestId,
+          error: error.message || String(error)
+        })
+        sendResponse({ success: false, error: error.message || String(error) })
+      })
+    
+    return true // Keep channel open for async response
   }
   
   return false

@@ -2614,6 +2614,215 @@
     });
   }
 
+  // ==========================================================================
+  // n8n Node Type Version Mapping (FIX #1)
+  // Maps common node types to their latest stable typeVersion
+  // ==========================================================================
+  const NODE_TYPE_VERSIONS = {
+    'n8n-nodes-base.httpRequest': 4.2,
+    'n8n-nodes-base.set': 3.4,
+    'n8n-nodes-base.code': 2,
+    'n8n-nodes-base.if': 2,
+    'n8n-nodes-base.switch': 3,
+    'n8n-nodes-base.merge': 3,
+    'n8n-nodes-base.splitInBatches': 3,
+    'n8n-nodes-base.itemLists': 3,
+    'n8n-nodes-base.filter': 2,
+    'n8n-nodes-base.aggregate': 1,
+    'n8n-nodes-base.googleSheets': 4.4,
+    'n8n-nodes-base.postgres': 2.4,
+    'n8n-nodes-base.mySql': 2.4,
+    'n8n-nodes-base.mongoDb': 1.1,
+    'n8n-nodes-base.redis': 1,
+    'n8n-nodes-base.slack': 2.2,
+    'n8n-nodes-base.telegram': 1.2,
+    'n8n-nodes-base.discord': 2,
+    'n8n-nodes-base.gmail': 2.1,
+    'n8n-nodes-base.microsoftOutlook': 2,
+    'n8n-nodes-base.airtable': 2,
+    'n8n-nodes-base.notion': 2.2,
+    'n8n-nodes-base.supabase': 1,
+    'n8n-nodes-base.webhook': 2,
+    'n8n-nodes-base.scheduleTrigger': 1.2,
+    'n8n-nodes-base.manualTrigger': 1,
+    'n8n-nodes-base.executeWorkflow': 1,
+    'n8n-nodes-base.respondToWebhook': 1.1,
+    'n8n-nodes-base.wait': 1.1,
+    'n8n-nodes-base.dateTime': 2,
+    'n8n-nodes-base.crypto': 1,
+    'n8n-nodes-base.xml': 1,
+    'n8n-nodes-base.html': 1.1,
+    'n8n-nodes-base.markdown': 1,
+    'n8n-nodes-base.openAi': 1.4,
+    '@n8n/n8n-nodes-langchain.agent': 1.6,
+    '@n8n/n8n-nodes-langchain.chainLlm': 1,
+    '@n8n/n8n-nodes-langchain.lmChatOpenAi': 1.1,
+    '@n8n/n8n-nodes-langchain.lmChatAnthropic': 1.2,
+    '@n8n/n8n-nodes-langchain.toolWorkflow': 1.1,
+  };
+
+  /**
+   * Get the appropriate typeVersion for a node type (FIX #1)
+   * @param {string} nodeType - The node type
+   * @param {number|undefined} explicitVersion - Explicitly provided version
+   * @returns {number} - The typeVersion to use
+   */
+  function getNodeTypeVersion(nodeType, explicitVersion) {
+    if (explicitVersion !== undefined && explicitVersion !== null) {
+      return explicitVersion;
+    }
+    return NODE_TYPE_VERSIONS[nodeType] || 1;
+  }
+
+  // ==========================================================================
+  // Node Name Sanitization (FIX #4)
+  // Removes invalid characters from node names
+  // ==========================================================================
+  const INVALID_NODE_NAME_CHARS = /[\/\\\"\'<>|:*?]/g;
+
+  /**
+   * Sanitize node name by removing invalid characters (FIX #4)
+   * @param {string} name - The proposed node name
+   * @returns {string} - Sanitized node name
+   */
+  function sanitizeNodeName(name) {
+    if (!name || typeof name !== 'string') {
+      return `Node_${Date.now()}`;
+    }
+    // Remove invalid characters and trim
+    let sanitized = name.replace(INVALID_NODE_NAME_CHARS, '_').trim();
+    // Ensure name is not empty after sanitization
+    if (!sanitized) {
+      sanitized = `Node_${Date.now()}`;
+    }
+    // Limit length (n8n has a max name length)
+    if (sanitized.length > 100) {
+      sanitized = sanitized.substring(0, 100);
+    }
+    return sanitized;
+  }
+
+  // ==========================================================================
+  // Position Format Handler (FIX #8)
+  // Handles both array [x, y] and object {x, y} formats
+  // ==========================================================================
+
+  /**
+   * Normalize position to array format (FIX #8)
+   * @param {Array|Object|undefined} position - Position in any format
+   * @param {number} offsetIndex - Offset index for default positioning
+   * @returns {Array} - Position as [x, y] array
+   */
+  function normalizePosition(position, offsetIndex = 0) {
+    // Already an array
+    if (Array.isArray(position) && position.length >= 2) {
+      return [Number(position[0]) || 0, Number(position[1]) || 0];
+    }
+    // Object format {x, y}
+    if (position && typeof position === 'object' && ('x' in position || 'y' in position)) {
+      return [Number(position.x) || 0, Number(position.y) || 0];
+    }
+    // Default horizontal flow positioning
+    return [250 + (350 * offsetIndex), 300];
+  }
+
+  // ==========================================================================
+  // System Node Type Detection (FIX #9)
+  // Proper detection using node types instead of names
+  // ==========================================================================
+  const SYSTEM_NODE_TYPES = new Set([
+    'n8n-nodes-base.manualTrigger',
+    'n8n-nodes-base.errorTrigger',
+    'n8n-nodes-base.start',
+    'n8n-nodes-base.executeWorkflowTrigger',
+    'n8n-nodes-base.workflowTrigger'
+  ]);
+
+  /**
+   * Check if a node is a system node that should not be deleted (FIX #9)
+   * @param {Object} node - The node object
+   * @returns {boolean} - True if system node
+   */
+  function isSystemNode(node) {
+    if (!node) return false;
+    return SYSTEM_NODE_TYPES.has(node.type);
+  }
+
+  // ==========================================================================
+  // Credential Type Mapping (FIX #7)
+  // Maps node types to their possible credential types
+  // ==========================================================================
+  const NODE_CREDENTIAL_MAP = {
+    // Google services (multiple options)
+    'n8n-nodes-base.googleSheets': ['googleSheetsOAuth2Api', 'googleApi'],
+    'n8n-nodes-base.googleDrive': ['googleDriveOAuth2Api', 'googleApi'],
+    'n8n-nodes-base.gmail': ['gmailOAuth2', 'googleApi'],
+    'n8n-nodes-base.googleCalendar': ['googleCalendarOAuth2Api', 'googleApi'],
+    // Database connections
+    'n8n-nodes-base.postgres': ['postgres'],
+    'n8n-nodes-base.mySql': ['mySql'],
+    'n8n-nodes-base.mongoDb': ['mongoDb'],
+    'n8n-nodes-base.redis': ['redis'],
+    // AI services
+    'n8n-nodes-base.openAi': ['openAiApi'],
+    '@n8n/n8n-nodes-langchain.lmChatOpenAi': ['openAiApi'],
+    '@n8n/n8n-nodes-langchain.lmChatAnthropic': ['anthropicApi'],
+    // Communication
+    'n8n-nodes-base.slack': ['slackApi', 'slackOAuth2Api'],
+    'n8n-nodes-base.telegram': ['telegramApi'],
+    'n8n-nodes-base.discord': ['discordApi', 'discordOAuth2Api', 'discordWebhookApi'],
+    // Cloud storage
+    'n8n-nodes-base.dropbox': ['dropboxApi', 'dropboxOAuth2Api'],
+    'n8n-nodes-base.oneDrive': ['microsoftOneDriveOAuth2Api'],
+    'n8n-nodes-base.aws': ['aws'],
+    // Project management
+    'n8n-nodes-base.notion': ['notionApi', 'notionOAuth2Api'],
+    'n8n-nodes-base.airtable': ['airtableApi', 'airtableOAuth2Api', 'airtableTokenApi'],
+    'n8n-nodes-base.trello': ['trelloApi'],
+    'n8n-nodes-base.asana': ['asanaApi', 'asanaOAuth2Api'],
+    // CRM
+    'n8n-nodes-base.hubspot': ['hubspotApi', 'hubspotOAuth2Api'],
+    'n8n-nodes-base.salesforce': ['salesforceOAuth2Api'],
+    // HTTP/Generic
+    'n8n-nodes-base.httpRequest': ['httpBasicAuth', 'httpHeaderAuth', 'oAuth2Api', 'httpDigestAuth'],
+  };
+
+  /**
+   * Get possible credential types for a node type (FIX #7)
+   * @param {string} nodeType - The node type
+   * @returns {Array<string>} - Array of possible credential type names
+   */
+  function getCredentialTypesForNode(nodeType) {
+    return NODE_CREDENTIAL_MAP[nodeType] || [];
+  }
+
+  // ==========================================================================
+  // Node Type Normalization (FIX #6)
+  // Handles case sensitivity issues in node type names
+  // ==========================================================================
+  const NODE_TYPE_ALIASES = {
+    // Common case variations
+    'n8n-nodes-base.httprequest': 'n8n-nodes-base.httpRequest',
+    'n8n-nodes-base.googlesheets': 'n8n-nodes-base.googleSheets',
+    'n8n-nodes-base.mysql': 'n8n-nodes-base.mySql',
+    'n8n-nodes-base.postgresql': 'n8n-nodes-base.postgres',
+    'n8n-nodes-base.mongodb': 'n8n-nodes-base.mongoDb',
+    'n8n-nodes-base.openai': 'n8n-nodes-base.openAi',
+    'n8n-nodes-base.googledrive': 'n8n-nodes-base.googleDrive',
+    'n8n-nodes-base.googlecalendar': 'n8n-nodes-base.googleCalendar',
+  };
+
+  /**
+   * Normalize node type name to correct case (FIX #6)
+   * @param {string} nodeType - The node type (possibly incorrect case)
+   * @returns {string} - Normalized node type
+   */
+  function normalizeNodeType(nodeType) {
+    if (!nodeType) return 'n8n-nodes-base.set';
+    const lowerType = nodeType.toLowerCase();
+    return NODE_TYPE_ALIASES[lowerType] || nodeType;
+  }
+
   /**
    * PRODUCTION-GRADE Vue Reactivity Synchronization
    * 
@@ -2763,15 +2972,14 @@
 
     try {
       const offset = window.n8nChatPositionOffsetCounter++;
+      const nodeType = normalizeNodeType(nodeData.type || "n8n-nodes-base.set"); // FIX #6: Normalized type
 
       const node = {
         id: nodeData.id || generateUUID(),
-        name: nodeData.name || `Node ${Date.now()}`,
-        type: nodeData.type || "n8n-nodes-base.set",
-        typeVersion: nodeData.typeVersion || 1,
-        position: Array.isArray(nodeData.position) 
-          ? nodeData.position 
-          : [250 + (350 * offset), 300], // Horizontal flow by default
+        name: sanitizeNodeName(nodeData.name) || `Node_${Date.now()}`, // FIX #4: Sanitized name
+        type: nodeType,
+        typeVersion: getNodeTypeVersion(nodeType, nodeData.typeVersion), // FIX #1: Dynamic version
+        position: normalizePosition(nodeData.position, offset), // FIX #8: Normalized position
         parameters: nodeData.parameters || {},
         disabled: nodeData.disabled || false,
         notes: nodeData.notes
@@ -2862,10 +3070,9 @@
     const node = getNodeByName(nodeName);
     if (!node) return { success: false, error: `Node "${nodeName}" not found` };
 
-    // ===== SECURITY GATE: System Node Protection =====
-    const SYSTEM_NODES = ['Start', 'Error Trigger', 'When clicking "Execute Workflow"'];
-    if (SYSTEM_NODES.includes(node.type) || SYSTEM_NODES.includes(nodeName)) {
-      return { success: false, error: `Cannot delete system node: ${nodeName}` };
+    // ===== SECURITY GATE: System Node Protection (FIX #9) =====
+    if (isSystemNode(node)) {
+      return { success: false, error: `Cannot delete system node: ${nodeName} (type: ${node.type})` };
     }
 
     try {
@@ -2966,6 +3173,10 @@
     }
   }
 
+  /**
+   * Add connection between two nodes (FIX #2: Improved connection format)
+   * Supports both store.addConnection and direct workflow.connections manipulation
+   */
   function addConnection(sourceName, targetName, sourceType, targetType, sourceIndex, targetIndex) {
     const store = getWorkflowsStore();
     if (!store) return { success: false, error: "Store not found" };
@@ -2976,14 +3187,66 @@
 
       if (!source || !target) return { success: false, error: "Source or Target node not found" };
 
-      const connection = [
-        { node: sourceName, type: sourceType || 'main', index: sourceIndex || 0 },
-        { node: targetName, type: targetType || 'main', index: targetIndex || 0 }
-      ];
+      const sType = sourceType || 'main';
+      const tType = targetType || 'main';
+      const sIndex = sourceIndex || 0;
+      const tIndex = targetIndex || 0;
 
-      store.addConnection({ connection });
+      // Try store.addConnection first (n8n's preferred method)
+      try {
+        const connection = [
+          { node: sourceName, type: sType, index: sIndex },
+          { node: targetName, type: tType, index: tIndex }
+        ];
+        store.addConnection({ connection });
+        Logger.success(`Connection added via store: ${sourceName} → ${targetName}`);
+        return { success: true };
+      } catch (storeError) {
+        Logger.warn('store.addConnection failed, using direct manipulation', storeError);
+      }
+
+      // FIX #2: Fallback to direct workflow.connections manipulation
+      const workflow = store.workflow;
+      if (!workflow) {
+        return { success: false, error: "Workflow not available" };
+      }
+
+      // Initialize connections structure if needed
+      if (!workflow.connections) {
+        workflow.connections = {};
+      }
+      if (!workflow.connections[sourceName]) {
+        workflow.connections[sourceName] = {};
+      }
+      if (!workflow.connections[sourceName][sType]) {
+        workflow.connections[sourceName][sType] = [];
+      }
+
+      // Ensure the output index array exists
+      while (workflow.connections[sourceName][sType].length <= sIndex) {
+        workflow.connections[sourceName][sType].push([]);
+      }
+
+      // Add the connection (n8n format: target node info in the output array)
+      const existingConnections = workflow.connections[sourceName][sType][sIndex] || [];
+      const alreadyExists = existingConnections.some(
+        conn => conn.node === targetName && conn.type === tType && conn.index === tIndex
+      );
+
+      if (!alreadyExists) {
+        workflow.connections[sourceName][sType][sIndex].push({
+          node: targetName,
+          type: tType,
+          index: tIndex
+        });
+        Logger.success(`Connection added directly: ${sourceName}[${sIndex}] → ${targetName}[${tIndex}]`);
+      } else {
+        Logger.log(`Connection already exists: ${sourceName} → ${targetName}`);
+      }
+
       return { success: true };
     } catch (e) {
+      Logger.error('Error in addConnection:', e);
       return { success: false, error: e.message };
     }
   }
@@ -5960,10 +6223,18 @@
       
       Logger.info(`Duplicating ${args.ids.length} nodes...`);
       
+      // ✅ FIX: Get canvasOps before using it
+      const canvasOps = getCanvasOperations();
+      
+      if (!canvasOps || !canvasOps.duplicateNodes) {
+        return { success: false, error: "Canvas operations not available for node duplication" };
+      }
+      
       // Get node names from IDs (extension uses names, n8n uses IDs)
       const nodeIds = args.ids.map(nameOrId => {
-        const node = workflowsStore.getNodeByName?.(nameOrId) || 
-                     workflowsStore.getNodeById?.(nameOrId);
+        const node = store.getNodeByName?.(nameOrId) ||
+                     store.getNodeById?.(nameOrId) ||
+                     store.workflow?.nodes?.find(n => n.name === nameOrId || n.id === nameOrId);
         return node?.id;
       }).filter(Boolean);
       
@@ -5976,7 +6247,8 @@
       
       // Get new node names
       const newNodeNames = newNodeIds.map(id => {
-        const node = workflowsStore.getNodeById(id);
+        const node = store.getNodeById?.(id) ||
+                     store.workflow?.nodes?.find(n => n.id === id);
         return node?.name;
       }).filter(Boolean);
       
@@ -6014,10 +6286,12 @@
       }
       
       // Get nodes (support both names and IDs)
-      const sourceNode = workflowsStore.getNodeByName?.(args.sourceNode) || 
-                        workflowsStore.getNodeById?.(args.sourceNode);
-      const targetNode = workflowsStore.getNodeByName?.(args.targetNode) || 
-                        workflowsStore.getNodeById?.(args.targetNode);
+      const sourceNode = store.getNodeByName?.(args.sourceNode) ||
+                        store.getNodeById?.(args.sourceNode) ||
+                        store.workflow?.nodes?.find(n => n.name === args.sourceNode || n.id === args.sourceNode);
+      const targetNode = store.getNodeByName?.(args.targetNode) ||
+                        store.getNodeById?.(args.targetNode) ||
+                        store.workflow?.nodes?.find(n => n.name === args.targetNode || n.id === args.targetNode);
       
       if (!sourceNode) {
         return { valid: false, error: `Source node "${args.sourceNode}" not found` };
@@ -6028,8 +6302,11 @@
       
       const connectionType = args.connectionType || 'main';
       
+      // ✅ FIX: Get canvasOps before using it
+      const canvasOps = getCanvasOperations();
+      
       // Validate using n8n's built-in validation
-      if (!canvasOps.isConnectionAllowed || typeof canvasOps.isConnectionAllowed !== 'function') {
+      if (!canvasOps || !canvasOps.isConnectionAllowed || typeof canvasOps.isConnectionAllowed !== 'function') {
         // Fallback: basic check
         Logger.warn("isConnectionAllowed not available, using basic validation");
         return { 
@@ -6110,15 +6387,14 @@
             continue;
           }
           
-          // Prepare node (same format as addNode)
+          // Prepare node (same format as addNode) - Using FIX helpers
+          const nodeType = normalizeNodeType(nodeConfig.type); // FIX #6
           const node = {
             id: nodeConfig.id || generateUUID(),
-            name: nodeConfig.name || `${nodeConfig.type.split('.').pop()} ${Date.now()}_${i}`,
-            type: nodeConfig.type,
-            typeVersion: nodeConfig.typeVersion || 1,
-            position: Array.isArray(nodeConfig.position) 
-              ? nodeConfig.position 
-              : [250 + (350 * (offset + i)), 300], // Horizontal flow
+            name: sanitizeNodeName(nodeConfig.name) || `${nodeType.split('.').pop()}_${Date.now()}_${i}`, // FIX #4
+            type: nodeType,
+            typeVersion: getNodeTypeVersion(nodeType, nodeConfig.typeVersion), // FIX #1
+            position: normalizePosition(nodeConfig.position, offset + i), // FIX #8
             parameters: nodeConfig.parameters || {},
             disabled: nodeConfig.disabled || false,
             notes: nodeConfig.notes || ''
@@ -6241,16 +6517,13 @@
         return { success: false, error: "None of the specified nodes were found" };
       }
       
-      // ===== SECURITY GATE: System Node Protection =====
-      const SYSTEM_NODES = ['Start', 'Error Trigger', 'When clicking "Execute Workflow"'];
-      const protectedNodes = nodesToDelete.filter(node => 
-        SYSTEM_NODES.includes(node.type) || SYSTEM_NODES.includes(node.name)
-      );
-      
+      // ===== SECURITY GATE: System Node Protection (FIX #9) =====
+      const protectedNodes = nodesToDelete.filter(node => isSystemNode(node));
+
       if (protectedNodes.length > 0) {
-        return { 
-          success: false, 
-          error: `Cannot delete system nodes: ${protectedNodes.map(n => n.name).join(', ')}` 
+        return {
+          success: false,
+          error: `Cannot delete system nodes: ${protectedNodes.map(n => `${n.name} (${n.type})`).join(', ')}`
         };
       }
       
@@ -6464,13 +6737,17 @@
   // TIER 1.4: Get Execution Results
   function getExecutionResults(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
       
       if (!args.nodeName) {
         return { success: false, error: "nodeName is required" };
       }
       
-      const results = workflowsStore.getWorkflowResultDataByNodeName?.(args.nodeName);
+      const results = store.getWorkflowResultDataByNodeName?.(args.nodeName);
       
       if (!results || results.length === 0) {
         return { 
@@ -6523,9 +6800,17 @@
       }
       
       // Check if new name already exists
-      const existingNode = workflowsStore.getNodeByName?.(args.newName);
+      const existingNode = store.getNodeByName?.(args.newName) ||
+                          store.workflow?.nodes?.find(n => n.name === args.newName);
       if (existingNode) {
         return { success: false, error: `Node "${args.newName}" already exists` };
+      }
+      
+      // ✅ FIX: Get canvasOps before using it
+      const canvasOps = getCanvasOperations();
+      
+      if (!canvasOps || !canvasOps.renameNode) {
+        return { success: false, error: "Canvas operations not available for node renaming" };
       }
       
       await canvasOps.renameNode(args.currentName, args.newName, {
@@ -6559,21 +6844,24 @@
         return { success: false, error: "nodeId is required" };
       }
       
-      const node = workflowsStore.getNodeByName?.(args.nodeId) || 
-                   workflowsStore.getNodeById?.(args.nodeId);
+      const node = store.getNodeByName?.(args.nodeId) ||
+                   store.getNodeById?.(args.nodeId) ||
+                   store.workflow?.nodes?.find(n => n.name === args.nodeId || n.id === args.nodeId);
       
       if (!node) {
         return { success: false, error: `Node "${args.nodeId}" not found` };
       }
       
-      const allNodes = workflowsStore.allNodes || [];
+      // ✅ FIX: Get canvasOps before using it
+      const canvasOps = getCanvasOperations();
+      const allNodes = store.allNodes || store.workflow?.nodes || [];
       const suggestions = [];
       
       for (const candidate of allNodes) {
         if (candidate.id === node.id) continue;
         
         try {
-          const isAllowed = canvasOps.isConnectionAllowed?.(
+          const isAllowed = canvasOps?.isConnectionAllowed?.(
             { node: node.id, type: 'main', index: 0 },
             { node: candidate.id, type: 'main', index: 0 },
             'main'
@@ -6724,10 +7012,14 @@
   // TIER 1.9: Validate Workflow
   function validateWorkflow(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
       
-      const issues = workflowsStore.workflowValidationIssues || [];
-      const nodesWithIssues = workflowsStore.nodesWithIssues || [];
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
+      
+      const issues = store.workflowValidationIssues || [];
+      const nodesWithIssues = store.nodesWithIssues || [];
       
       const validationReport = {
         isValid: issues.length === 0,
@@ -6756,19 +7048,24 @@
   // TIER 1.10: Clear Execution History
   function clearExecutionHistory(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
       
       if (!args.nodeName) {
         return { success: false, error: "nodeName is required" };
       }
       
-      const node = workflowsStore.getNodeByName?.(args.nodeName);
+      const node = store.getNodeByName?.(args.nodeName) ||
+                   store.workflow?.nodes?.find(n => n.name === args.nodeName);
       
       if (!node) {
         return { success: false, error: `Node "${args.nodeName}" not found` };
       }
       
-      workflowsStore.clearNodeExecutionData?.(node.name);
+      store.clearNodeExecutionData?.(node.name);
       
       return {
         success: true,
@@ -6788,8 +7085,13 @@
   // TIER 2.1: Export Workflow
   function exportWorkflow(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
-      const workflow = workflowsStore.workflow;
+      const store = getWorkflowsStore();
+      
+      if (!store || !store.workflow) {
+        return { success: false, error: "No workflow currently open" };
+      }
+      
+      const workflow = store.workflow;
       
       const format = args.format || 'full';
       
@@ -6842,6 +7144,13 @@
         return { success: false, error: "Invalid workflow format. Must have 'nodes' and 'connections'" };
       }
       
+      // ✅ FIX: Get canvasOps before using it
+      const canvasOps = getCanvasOperations();
+      
+      if (!canvasOps || !canvasOps.importWorkflowData) {
+        return { success: false, error: "Canvas operations not available for workflow import" };
+      }
+      
       const clearExisting = args.clearExisting !== false;
       
       if (clearExisting && canvasOps.resetWorkspace) {
@@ -6870,12 +7179,17 @@
   // TIER 2.3: Analyze Performance
   function analyzePerformance(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
-      const allNodes = workflowsStore.allNodes || [];
+      const store = getWorkflowsStore();
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
+      
+      const allNodes = store.allNodes || store.workflow?.nodes || [];
       const performanceReport = [];
       
       for (const node of allNodes) {
-        const results = workflowsStore.getWorkflowResultDataByNodeName?.(node.name);
+        const results = store.getWorkflowResultDataByNodeName?.(node.name);
         if (results && results.length > 0) {
           const avgTime = results.reduce((sum, r) => sum + (r.executionTime || 0), 0) / results.length;
           const maxTime = Math.max(...results.map(r => r.executionTime || 0));
@@ -7021,15 +7335,16 @@
       
       // ===== STEP 3: Create New Node (Same Position, Optionally Same Name) =====
       const keepName = args.keepName !== false; // Default: keep name
-      const newNodeName = keepName 
-        ? oldNode.name 
-        : (args.newNodeName || `${args.newNodeType.split('.').pop()} ${Date.now()}`);
-      
+      const normalizedType = normalizeNodeType(args.newNodeType); // FIX #6
+      const newNodeName = keepName
+        ? oldNode.name
+        : sanitizeNodeName(args.newNodeName) || `${normalizedType.split('.').pop()}_${Date.now()}`; // FIX #4
+
       const newNode = {
         id: generateUUID(),
         name: newNodeName,
-        type: args.newNodeType,
-        typeVersion: args.typeVersion || 1,
+        type: normalizedType,
+        typeVersion: getNodeTypeVersion(normalizedType, args.typeVersion), // FIX #1
         position: [...oldNode.position], // Clone position array
         parameters: args.parameters || {},
         disabled: args.disabled !== undefined ? args.disabled : oldNode.disabled,
@@ -7154,16 +7469,22 @@
   async function connectAdjacentNodesAuto(args) {
     try {
       const canvasOps = getCanvasOperations();
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
       
       if (!canvasOps || !canvasOps.connectAdjacentNodes) {
         return { success: false, error: "connectAdjacentNodes not available" };
       }
       
-      const sourceNode = workflowsStore.getNodeByName?.(args.sourceNodeId) || 
-                        workflowsStore.getNodeById?.(args.sourceNodeId);
-      const targetNode = workflowsStore.getNodeByName?.(args.targetNodeId) || 
-                        workflowsStore.getNodeById?.(args.targetNodeId);
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
+      
+      const sourceNode = store.getNodeByName?.(args.sourceNodeId) ||
+                        store.getNodeById?.(args.sourceNodeId) ||
+                        store.workflow?.nodes?.find(n => n.name === args.sourceNodeId || n.id === args.sourceNodeId);
+      const targetNode = store.getNodeByName?.(args.targetNodeId) ||
+                        store.getNodeById?.(args.targetNodeId) ||
+                        store.workflow?.nodes?.find(n => n.name === args.targetNodeId || n.id === args.targetNodeId);
       
       if (!sourceNode || !targetNode) {
         return { success: false, error: "Source or target node not found" };
@@ -7191,8 +7512,13 @@
   // TIER 3.1: Create Workflow Snapshot
   async function createWorkflowSnapshot(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
-      const workflow = workflowsStore.workflow;
+      const store = getWorkflowsStore();
+      
+      if (!store || !store.workflow) {
+        return { success: false, error: "No workflow currently open" };
+      }
+      
+      const workflow = store.workflow;
       
       if (!args.name) {
         return { success: false, error: "snapshot name is required" };
@@ -7228,17 +7554,21 @@
   async function restoreWorkflowSnapshot(args) {
     try {
       const canvasOps = getCanvasOperations();
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
       
       if (!canvasOps) {
         return { success: false, error: "Canvas operations not available" };
+      }
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
       }
       
       if (!args.snapshotName) {
         return { success: false, error: "snapshotName is required" };
       }
       
-      const workflowId = workflowsStore.workflowId;
+      const workflowId = store.workflowId || store.workflow?.id;
       const key = `snapshot_${workflowId}_${args.snapshotName}`;
       const result = await chrome.storage.local.get(key);
       
@@ -7265,8 +7595,13 @@
   // TIER 3.3: List Snapshots
   async function listWorkflowSnapshots(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
-      const workflowId = workflowsStore.workflowId;
+      const store = getWorkflowsStore();
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
+      
+      const workflowId = store.workflowId || store.workflow?.id;
       const prefix = `snapshot_${workflowId}_`;
       
       const allStorage = await chrome.storage.local.get(null);
@@ -7302,14 +7637,19 @@
   async function openSubworkflow(args) {
     try {
       const canvasOps = getCanvasOperations();
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
       
       if (!canvasOps || !canvasOps.tryToOpenSubworkflowInNewTab) {
         return { success: false, error: "Sub-workflow navigation not available" };
       }
       
-      const node = workflowsStore.getNodeByName?.(args.nodeId) || 
-                   workflowsStore.getNodeById?.(args.nodeId);
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
+      
+      const node = store.getNodeByName?.(args.nodeId) ||
+                   store.getNodeById?.(args.nodeId) ||
+                   store.workflow?.nodes?.find(n => n.name === args.nodeId || n.id === args.nodeId);
       
       if (!node) {
         return { success: false, error: `Node "${args.nodeId}" not found` };
@@ -7332,21 +7672,26 @@
   // TIER 3.5: Get Webhook URL
   function getWebhookUrl(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
+      const store = getWorkflowsStore();
+      
+      if (!store) {
+        return { success: false, error: "Workflows store not available" };
+      }
       
       if (!args.nodeId) {
         return { success: false, error: "nodeId is required" };
       }
       
-      const node = workflowsStore.getNodeByName?.(args.nodeId) || 
-                   workflowsStore.getNodeById?.(args.nodeId);
+      const node = store.getNodeByName?.(args.nodeId) ||
+                   store.getNodeById?.(args.nodeId) ||
+                   store.workflow?.nodes?.find(n => n.name === args.nodeId || n.id === args.nodeId);
       
       if (!node) {
         return { success: false, error: `Node "${args.nodeId}" not found` };
       }
       
       const webhookType = args.webhookType || 'production';
-      const webhookUrl = workflowsStore.getWebhookUrl?.(node.id, webhookType);
+      const webhookUrl = store.getWebhookUrl?.(node.id, webhookType);
       
       if (!webhookUrl) {
         return { success: false, error: `Node "${node.name}" does not have a webhook` };
@@ -7368,12 +7713,13 @@
   // TIER 3.6: Generate Workflow Documentation
   function generateWorkflowDocs(args) {
     try {
-      const workflowsStore = getWorkflowsStore();
-      const workflow = workflowsStore.workflow;
+      const store = getWorkflowsStore();
       
-      if (!workflow) {
+      if (!store || !store.workflow) {
         return { success: false, error: "No workflow currently open" };
       }
+      
+      const workflow = store.workflow;
       
       const format = args.format || 'markdown';
       const includeNodeDetails = args.includeNodeDetails !== false;
@@ -8396,6 +8742,27 @@
     if (event.source !== window) return;
     
     const { type, functionName, args, requestId } = event.data;
+    
+    // Handle node types request
+    if (type === "n8nChatGetNodeTypes") {
+      try {
+        const app = getN8nApp()
+        const nodeTypes = app?._context?.provides?.nodeTypes || {}
+        window.postMessage({
+          type: "n8nChatNodeTypesResponse",
+          requestId: requestId,
+          nodeTypes: nodeTypes
+        }, '*')
+      } catch (error) {
+        window.postMessage({
+          type: "n8nChatNodeTypesResponse",
+          requestId: requestId,
+          error: error.message,
+          nodeTypes: {}
+        }, '*')
+      }
+      return
+    }
     
     if (type !== "n8nChatExecuteFunction") return;
 

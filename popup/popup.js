@@ -233,6 +233,8 @@ const PROVIDERS = {
   openai: {
     name: "OpenAI",
     models: [
+      // n8n AI Workflow Builder - Official Model ⭐
+      { value: "gpt-5.2-2025-12-11", label: "GPT-5.2 ⭐ (n8n)" },
       // Reasoning Models (o-series) - Function Calling ✅
       { value: "o3", label: "o3 ⭐ (Reasoning)" },
       { value: "o4-mini", label: "o4-mini (Reasoning)" },
@@ -256,16 +258,16 @@ const PROVIDERS = {
   anthropic: {
     name: "Anthropic (Claude)",
     models: [
-      // Claude 4.5 Series - Advanced Tool Use ✅ (2026)
-      { value: "claude-opus-4-5-20251101", label: "Claude 4.5 Opus ⭐" },
-      { value: "claude-sonnet-4-5-20250929", label: "Claude 4.5 Sonnet ⭐" },
-      { value: "claude-haiku-4-5-20251001", label: "Claude 4.5 Haiku" },
-      // Claude 4.1 Series - Tool Use ✅
+      // n8n AI Workflow Builder - Official Models (Most Popular) ⭐
+      { value: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5 ⭐ (n8n Default)" },
+      { value: "claude-opus-4-5-20251101", label: "Claude Opus 4.5 ⭐ (n8n)" },
+      { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 ⭐ (n8n)" },
+      // Other Claude 4.5 Series
       { value: "claude-opus-4-1-20250805", label: "Claude 4.1 Opus" },
-      // Claude 4 Series - Tool Use ✅
+      // Claude 4 Series
       { value: "claude-opus-4-20250514", label: "Claude 4 Opus" },
       { value: "claude-sonnet-4-20250514", label: "Claude 4 Sonnet" },
-      // Claude 3.5 Series - Tool Use ✅ (Deprecated soon)
+      // Claude 3.5 Series (Legacy)
       { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet (Legacy)" },
       { value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku (Legacy)" },
     ],
@@ -287,6 +289,13 @@ const PROVIDERS = {
   openrouter: {
     name: "OpenRouter",
     models: [
+      // n8n AI Workflow Builder - Official Models (Most Popular) ⭐
+      { value: "thudm/glm-4-plus", label: "GLM-4.7 ⭐ (n8n)" },
+      { value: "google/gemini-3-flash-preview", label: "Gemini 3 Flash ⭐ (n8n)" },
+      { value: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3.2 ⭐ (n8n)" },
+      { value: "google/gemini-3-pro-preview", label: "Gemini 3 Pro ⭐ (n8n)" },
+      { value: "mistralai/devstral-small", label: "Devstral ⭐ (n8n)" },
+      // Other Popular Models
       // Meta Llama 4 Series - Function Calling ✅ (2026)
       { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick (400B) ⭐" },
       { value: "meta-llama/llama-4-scout", label: "Llama 4 Scout (109B) ⭐" },
@@ -296,12 +305,11 @@ const PROVIDERS = {
       // OpenAI GPT-4o - Function Calling ✅
       { value: "openai/gpt-4o", label: "GPT-4o" },
       { value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
-      // Google Gemini 3 - Function Calling ✅ (2026)
-      { value: "google/gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+      // Google Gemini Series
       { value: "google/gemini-2.0-flash", label: "Gemini 2.0 Flash" },
       { value: "google/gemini-pro-1.5", label: "Gemini Pro 1.5" },
       { value: "google/gemini-flash-1.5", label: "Gemini Flash 1.5" },
-      // DeepSeek V3.2 - Function Calling ✅ (2026)
+      // DeepSeek Series
       { value: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2" },
       { value: "deepseek/deepseek-v3.1", label: "DeepSeek V3.1" },
       // Anthropic Claude 4.5 - Function Calling ✅ (2026)
@@ -920,8 +928,11 @@ async function testApiKey(provider, apiKey, model) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
             "x-api-key": apiKey,
-            "anthropic-version": "2024-06-01",
+            "anthropic-version": "2023-06-01",
+            // Required for browser-based CORS requests
+            "anthropic-dangerous-direct-browser-access": "true"
           },
           body: JSON.stringify({
             model: "claude-3-5-haiku-20241022",

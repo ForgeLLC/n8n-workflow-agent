@@ -232,12 +232,44 @@ export async function handleAnthropicStream(port, data) {
     
     // Add function calling directive if tools are provided
     let effectiveTemperature = config?.temperature || 0.7
-    const anthropicTools = data.body.tools || []
+    const anthropicToolsRaw = data.body.tools || []
+    
+    // Convert OpenAI format tools to Anthropic format
+    // OpenAI: { type: "function", function: { name, description, parameters } }
+    // Anthropic: { name, description, input_schema }
+    const anthropicTools = anthropicToolsRaw.map(tool => {
+      if (tool.type === "function" && tool.function) {
+        // OpenAI format - convert to Anthropic format
+        return {
+          name: tool.function.name,
+          description: tool.function.description || "",
+          input_schema: tool.function.parameters || { type: "object", properties: {} }
+        }
+      } else if (tool.name) {
+        // Already in Anthropic format
+        return tool
+      } else {
+        // Unknown format - try to extract
+        return {
+          name: tool.name || tool.function?.name || "unknown",
+          description: tool.description || tool.function?.description || "",
+          input_schema: tool.input_schema || tool.function?.parameters || { type: "object", properties: {} }
+        }
+      }
+    })
     
     if (anthropicTools.length > 0) {
       effectiveTemperature = Math.min(effectiveTemperature, 0.3)
-      const directive = `\n\nIMPORTANT: You have access to ${anthropicTools.length} functions that can perform actions in n8n workflow editor. You MUST use these functions to perform the requested actions. DO NOT just describe what to do - ACTUALLY CALL THE FUNCTIONS to execute the actions. When the user asks you to create nodes, modify workflows, or perform any n8n operations, you must call the appropriate functions immediately.`
+      const directive = `\n\nIMPORTANT: You have access to ${anthropicTools.length} functions that can perform actions in n8n workflow editor. You MUST use these functions to perform the requested actions. DO NOT just describe what to do - ACTUALLY CALL THE FUNCTIONS to execute the actions. When the user asks you to create nodes, modify workflows, or perform any n8n operations, you must call the appropriate functions immediately.
+
+CRITICAL: When calling functions, you MUST provide ALL required parameters. For bulk_create_nodes, you MUST provide a "nodes" array with complete node configurations. Empty arguments will cause errors.`
       systemContent = systemContent ? systemContent + directive : directive.trim()
+      
+      // Debug: Log tools being sent
+      console.log("[Anthropic Stream] Tools being sent:", anthropicTools.length, "tools")
+      console.log("[Anthropic Stream] Tool names:", anthropicTools.map(t => t.name).filter(Boolean))
+    } else {
+      console.warn("[Anthropic Stream] No tools provided! Tools array is empty.")
     }
 
     const requestBody = {
@@ -252,18 +284,24 @@ export async function handleAnthropicStream(port, data) {
       stream: true,
     }
     
-    // Add tools if provided
+    // Add tools if provided (Anthropic format)
     if (anthropicTools.length > 0) {
       requestBody.tools = anthropicTools
+      // Force tool use when tools are available
+      requestBody.tool_choice = { type: "auto" }
     }
 
+    // Build headers object - SECURITY: Use only x-api-key (Anthropic standard)
+    const headers = {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    }
+    
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2024-06-01",
-      },
+      headers: headers,
       body: JSON.stringify(requestBody),
     })
 
@@ -275,6 +313,9 @@ export async function handleAnthropicStream(port, data) {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ""
+    // Track active tool use for incremental JSON parsing
+    let activeToolUse = null
+    let toolUseInputBuffer = ""
 
     while (true) {
       const { done, value } = await reader.read()
@@ -288,24 +329,193 @@ export async function handleAnthropicStream(port, data) {
         if (line.startsWith("data: ")) {
           const data = line.slice(6).trim()
           if (data === "[DONE]") {
+            // Send any pending tool use before completing
+            if (activeToolUse) {
+              console.log("[Anthropic Stream] [DONE] event, sending pending tool use:", activeToolUse.name, "Buffer:", toolUseInputBuffer.substring(0, 200))
+              try {
+                let parsedInput = {}
+                if (toolUseInputBuffer && toolUseInputBuffer.trim()) {
+                  parsedInput = JSON.parse(toolUseInputBuffer)
+                } else {
+                  console.warn("[Anthropic Stream] [DONE] with empty buffer for:", activeToolUse.name)
+                }
+                port.postMessage({
+                  type: "function_call",
+                  functionName: activeToolUse.name,
+                  arguments: JSON.stringify(parsedInput),
+                  requestId,
+                })
+              } catch (e) {
+                console.warn("[Anthropic Stream] [DONE]: Failed to parse tool use input:", e)
+                port.postMessage({
+                  type: "function_call",
+                  functionName: activeToolUse.name,
+                  arguments: toolUseInputBuffer || "{}",
+                  requestId,
+                })
+              }
+              activeToolUse = null
+              toolUseInputBuffer = ""
+            }
             port.postMessage({ type: "complete", requestId })
             return
           }
 
           try {
             const json = JSON.parse(data)
+            
+            // Text content
             if (json.type === "content_block_delta" && json.delta?.type === "text_delta") {
               port.postMessage({
                 type: "chunk",
                 data: json.delta.text,
                 requestId,
               })
-            } else if (json.type === "message_stop") {
+            }
+            // Tool use (function calling) support - Anthropic format
+            else if (json.type === "content_block_start" && json.content_block?.type === "tool_use") {
+              // Tool use started - initialize tracking
+              activeToolUse = {
+                id: json.content_block.id,
+                name: json.content_block.name
+              }
+              // ✅ FIX: Enhanced logging for debugging
+              console.log("[Anthropic Stream] Tool use started:", activeToolUse.name)
+              console.log("[Anthropic Stream] Full content_block:", JSON.stringify(json.content_block).substring(0, 500))
+              
+              // Check if input is provided in the start event (can be object or string)
+              if (json.content_block.input !== undefined && json.content_block.input !== null) {
+                try {
+                  let inputStr
+                  if (typeof json.content_block.input === 'string') {
+                    // Already a string, use as-is
+                    inputStr = json.content_block.input
+                  } else if (typeof json.content_block.input === 'object') {
+                    // Object, stringify it
+                    inputStr = JSON.stringify(json.content_block.input)
+                  } else {
+                    // Fallback
+                    inputStr = JSON.stringify(json.content_block.input)
+                  }
+                  console.log("[Anthropic Stream] Tool use with complete input:", activeToolUse.name, "Input:", inputStr.substring(0, 200))
+                  port.postMessage({
+                    type: "function_call",
+                    functionName: activeToolUse.name,
+                    arguments: inputStr,
+                    requestId,
+                  })
+                } catch (e) {
+                  console.warn("[Anthropic Stream] Error processing tool use input:", e, "Input:", json.content_block.input)
+                  port.postMessage({
+                    type: "function_call",
+                    functionName: activeToolUse.name,
+                    arguments: JSON.stringify(json.content_block.input || {}),
+                    requestId,
+                  })
+                }
+                activeToolUse = null
+                toolUseInputBuffer = ""
+              } else {
+                // Input will come incrementally - initialize buffer
+                toolUseInputBuffer = ""
+                console.log("[Anthropic Stream] Tool use started (incremental):", activeToolUse.name, "- Waiting for input_json_delta events")
+              }
+            }
+            else if (json.type === "content_block_delta" && json.delta?.type === "input_json_delta") {
+              // Tool use input delta - accumulate incremental JSON
+              if (activeToolUse) {
+                if (json.delta.partial_json) {
+                  toolUseInputBuffer += json.delta.partial_json
+                  console.log("[Anthropic Stream] Accumulating tool use input:", activeToolUse.name, "Buffer length:", toolUseInputBuffer.length, "Latest chunk:", json.delta.partial_json.substring(0, 50))
+                } else {
+                  console.warn("[Anthropic Stream] input_json_delta event without partial_json:", json.delta)
+                }
+              } else {
+                console.warn("[Anthropic Stream] Received input_json_delta but no activeToolUse!")
+              }
+            }
+            else if (json.type === "content_block_stop") {
+              // Tool use completed - send function call with accumulated input
+              // Check if this is a tool_use block by checking if we have activeToolUse
+              if (activeToolUse) {
+                console.log("[Anthropic Stream] Tool use stop event, buffer:", toolUseInputBuffer.substring(0, 200))
+                try {
+                  let parsedInput = {}
+                  if (toolUseInputBuffer && toolUseInputBuffer.trim()) {
+                    parsedInput = JSON.parse(toolUseInputBuffer)
+                    console.log("[Anthropic Stream] Tool use completed:", activeToolUse.name, "Arguments:", JSON.stringify(parsedInput).substring(0, 200))
+                  } else {
+                    console.warn("[Anthropic Stream] Tool use buffer is empty for:", activeToolUse.name, "- This may cause empty arguments!")
+                    // If buffer is empty, try to check if there's any data in the stop event itself
+                    parsedInput = {}
+                  }
+                  port.postMessage({
+                    type: "function_call",
+                    functionName: activeToolUse.name,
+                    arguments: JSON.stringify(parsedInput),
+                    requestId,
+                  })
+                } catch (e) {
+                  console.warn("[Anthropic Stream] Failed to parse tool use input:", e, "Buffer:", toolUseInputBuffer.substring(0, 100))
+                  // Try to fix incomplete JSON
+                  let fixedBuffer = toolUseInputBuffer.trim()
+                  if (fixedBuffer && !fixedBuffer.startsWith('{') && !fixedBuffer.startsWith('[')) {
+                    fixedBuffer = '{' + fixedBuffer
+                  }
+                  if (fixedBuffer && !fixedBuffer.endsWith('}') && !fixedBuffer.endsWith(']')) {
+                    fixedBuffer = fixedBuffer + '}'
+                  }
+                  try {
+                    const parsedInput = fixedBuffer ? JSON.parse(fixedBuffer) : {}
+                    console.log("[Anthropic Stream] Tool use fixed and completed:", activeToolUse.name, "Arguments:", JSON.stringify(parsedInput).substring(0, 200))
+                    port.postMessage({
+                      type: "function_call",
+                      functionName: activeToolUse.name,
+                      arguments: JSON.stringify(parsedInput),
+                      requestId,
+                    })
+                  } catch (e2) {
+                    console.error("[Anthropic Stream] Could not parse tool use input, sending empty object")
+                    port.postMessage({
+                      type: "function_call",
+                      functionName: activeToolUse.name,
+                      arguments: "{}",
+                      requestId,
+                    })
+                  }
+                }
+                activeToolUse = null
+                toolUseInputBuffer = ""
+              }
+            }
+            else if (json.type === "message_stop") {
+              // Send any pending tool use before stopping
+              if (activeToolUse && toolUseInputBuffer) {
+                try {
+                  const parsedInput = JSON.parse(toolUseInputBuffer)
+                  port.postMessage({
+                    type: "function_call",
+                    functionName: activeToolUse.name,
+                    arguments: JSON.stringify(parsedInput),
+                    requestId,
+                  })
+                } catch (e) {
+                  port.postMessage({
+                    type: "function_call",
+                    functionName: activeToolUse.name,
+                    arguments: toolUseInputBuffer || "{}",
+                    requestId,
+                  })
+                }
+                activeToolUse = null
+                toolUseInputBuffer = ""
+              }
               port.postMessage({ type: "complete", requestId })
               return
             }
           } catch (e) {
             // Ignore parse errors
+            console.warn("[Anthropic Stream] Parse error:", e, "Line:", line)
           }
         }
       }
@@ -404,9 +614,12 @@ export async function handleGeminiStream(port, data) {
     // Gemini function calling support
     // Note: Only stable models support function calling (not preview/experimental)
     const modelLower = model.toLowerCase()
-    const supportsTools = !modelLower.includes("preview") && 
-                         !modelLower.includes("experimental") && 
-                         !modelLower.includes("exp")
+    // ✅ FIX: Strengthen model check for function calling support
+    const supportsTools = !modelLower.includes("preview") &&
+                         !modelLower.includes("experimental") &&
+                         !modelLower.includes("exp") &&
+                         !modelLower.includes("vision") && // Vision models don't support tools
+                         !modelLower.includes("-thinking") // Thinking models may have limited tool support
     
     if (tools && tools.length > 0 && supportsTools) {
       const functionDeclarations = tools

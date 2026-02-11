@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "n8n Chat",
-  "version": "1.5.0",
+  "version": "1.6.1",
   "description": "Cursor for n8n - create, edit, debug, and optimize n8n workflows using a simple chat.",
   "author": "eros.sh",
   "default_locale": "tr",
@@ -50,21 +50,21 @@
     "https://api.groq.com/*",
     "https://api.cohere.ai/*",
     "https://router.huggingface.co/*",
-    "https://generativelanguage.googleapis.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "optional_host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "content/injected.js",
-        "content/content.js",
-        "lib/*.js"
+        "content/injected.js"
       ],
       "matches": ["<all_urls>"]
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src https://* http://localhost:* http://127.0.0.1:*; img-src 'self' data: https:;"
   }
 }

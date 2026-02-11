@@ -15,6 +15,7 @@ import {
   handleHuggingFaceStream,
   handleLocalLlmStream,
 } from "./api-handlers.js"
+import { handleWorkflowBuilderChat } from "./workflow-builder-handler.js"
 
 // Function execution results cache
 const functionResults = new Map()
@@ -22,8 +23,21 @@ const functionResults = new Map()
 // Active streams map
 const activeStreams = new Map()
 
-// Message listener
+// SECURITY: Allowed port names whitelist
+const ALLOWED_PORTS = new Set([
+  'geminiStream', 'openaiStream', 'anthropicStream', 'deepseekStream',
+  'openrouterStream', 'groqStream', 'cohereStream', 'huggingfaceStream',
+  'localLlmStream', 'workflowBuilderStream'
+])
+
+// Message listener with origin verification
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // SECURITY: Verify sender is from extension context only
+  if (sender.url && !sender.url.startsWith('chrome-extension://')) {
+    console.warn('[Security] Rejected message from non-extension source:', sender.url)
+    return false
+  }
+
   // CRITICAL for MV3: Return true to indicate async response
   switch (message.name) {
     case "clearData":
@@ -43,8 +57,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 })
 
-// Port connection listener
+// Port connection listener with whitelist validation
 chrome.runtime.onConnect.addListener((port) => {
+  // SECURITY: Validate port name against whitelist
+  if (!ALLOWED_PORTS.has(port.name)) {
+    console.warn(`[Security] Rejected unknown port connection: ${port.name}`)
+    port.disconnect()
+    return
+  }
+
   port.onMessage.addListener(async (data) => {
     try {
       switch (port.name) {
@@ -74,6 +95,14 @@ chrome.runtime.onConnect.addListener((port) => {
           break
         case "localLlmStream":
           await handleLocalLlmStream(port, data)
+          break
+        case "workflowBuilderStream":
+          // Get tab ID from sender
+          const tabId = port.sender?.tab?.id
+          if (!tabId) {
+            throw new Error("Tab ID not available")
+          }
+          await handleWorkflowBuilderChat(data.body, tabId, port)
           break
         default:
           console.warn(`Unknown port: ${port.name}`)

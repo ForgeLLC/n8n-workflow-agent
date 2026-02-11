@@ -5,6 +5,12 @@ import { BaseAdapter } from "./baseAdapter.js"
  * Supports: GPT-4o, GPT-4 Turbo, GPT-3.5 Turbo, o-series
  */
 export class OpenAIAdapter extends BaseAdapter {
+  constructor({ apiKey, model, temperature, maxTokens }) {
+    super({ apiKey, model })
+    this.temperature = temperature
+    this.maxTokens = maxTokens
+  }
+  
   async analyze({ systemPrompt, userPrompt, schema }) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -18,12 +24,13 @@ export class OpenAIAdapter extends BaseAdapter {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
-        tools: [{ type: "function", function: schema }],
-        tool_choice: {
+        tools: schema ? [{ type: "function", function: schema }] : undefined,
+        tool_choice: schema ? {
           type: "function",
-          function: { name: schema.name }
-        },
-        temperature: 0.1 // Low temp for deterministic structured output
+          function: { name: schema.name || schema.function?.name || 'analyze' }
+        } : undefined,
+        temperature: this.temperature !== undefined ? this.temperature : 0, // n8n uses 0
+        max_tokens: this.maxTokens || 4096
       })
     })
 

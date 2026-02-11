@@ -5,31 +5,42 @@ import { BaseAdapter } from "./baseAdapter.js"
  * Supports: Claude 4.5 Series, Claude 4 Series, Claude 3.5 Series
  */
 export class AnthropicAdapter extends BaseAdapter {
+  constructor({ apiKey, model, temperature, maxTokens }) {
+    super({ apiKey, model })
+    this.temperature = temperature
+    this.maxTokens = maxTokens
+  }
+  
   async analyze({ systemPrompt, userPrompt, schema }) {
+    // Build headers object - SECURITY: Use only x-api-key (Anthropic standard)
+    const headers = {
+      "Content-Type": "application/json",
+      "x-api-key": this.apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "prompt-caching-2024-07-31",
+      "anthropic-dangerous-direct-browser-access": "true"
+    }
+    
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": "2024-06-01"
-      },
+      headers: headers,
       body: JSON.stringify({
         model: this.model,
-        max_tokens: 4096,
-        temperature: 0.1, // Low temp for deterministic output
+        max_tokens: this.maxTokens || 16000, // Support n8n's max tokens (16k)
+        temperature: this.temperature !== undefined ? this.temperature : 0, // n8n uses 0
         system: systemPrompt,
         messages: [
           { role: "user", content: userPrompt }
         ],
-        tools: [{
-          name: schema.name,
-          description: schema.description,
-          input_schema: schema.parameters
-        }],
-        tool_choice: {
+        tools: schema ? [{
+          name: schema.name || 'analyze',
+          description: schema.description || 'Analyze and return structured data',
+          input_schema: schema.parameters || schema
+        }] : undefined,
+        tool_choice: schema ? {
           type: "tool",
-          name: schema.name
-        }
+          name: schema.name || 'analyze'
+        } : undefined
       })
     })
 

@@ -21,11 +21,58 @@ import {
   getNodeDetails,
 } from "../../lib/workflow-access.js"
 
+// SECURITY: Whitelist of allowed function names
+const ALLOWED_FUNCTIONS = new Set([
+  // Basic Operations
+  'create_node', 'update_node', 'remove_node', 'add_connection',
+  'get_workflow_info', 'get_node_info', 'remove_connection', 'clone_node',
+  // Node Library
+  'search_nodes', 'get_node_schema', 'find_node_by_intent',
+  'get_node_credentials', 'get_credential_details', 'get_credential_usage_examples',
+  // Bulk Operations
+  'bulk_update_nodes', 'bulk_disable_nodes', 'auto_arrange_nodes',
+  // Validation & Execution
+  'validate_workflow', 'test_workflow', 'get_workflow_variables', 'export_workflow',
+  // Advanced Features
+  'import_workflow', 'merge_workflows', 'get_execution_history',
+  'analyze_performance', 'get_workflow_templates', 'create_from_template',
+  'get_node_execution_data', 'compare_workflows', 'optimize_workflow',
+  // Enterprise Features
+  'create_workflow_snapshot', 'list_workflow_snapshots', 'restore_workflow_snapshot',
+  'debug_workflow', 'generate_test_cases', 'run_test_suite',
+  'generate_cicd_config', 'generate_custom_node', 'generate_workflow_docs',
+  // LangChain & AI
+  'create_langchain_agent', 'add_tool_to_agent', 'configure_agent_memory', 'connect_agent_to_tool',
+  // Vector Store & RAG
+  'create_vector_store_connection', 'create_embedding_node', 'create_vector_search_node', 'create_rag_workflow',
+  // Execution Control
+  'execute_workflow', 'stop_workflow_execution', 'get_execution_status', 'retry_failed_execution',
+  // Credential Management
+  'check_node_credentials', 'suggest_credential_type', 'validate_credential_connection',
+  // Sub-workflow
+  'create_subworkflow_node', 'import_subworkflow', 'get_subworkflow_info',
+  // Advanced Config
+  'configure_node_webhook', 'configure_node_schedule', 'configure_node_error_handling',
+  // Batch Processing
+  'create_batch_processor', 'create_loop_node', 'configure_split_in_batches',
+  // UI Features
+  'create_workflow_visualization', 'group_nodes', 'set_node_color',
+  // AI Agentic
+  'create_chained_ai_workflow', 'create_single_agent_workflow',
+  'create_gatekeeper_workflow', 'create_multi_agent_team'
+])
+
 /**
  * Function call'ı execute et
  */
 export async function executeFunction(functionCall) {
   const { name, arguments: args } = functionCall
+
+  // SECURITY: Validate function name against whitelist
+  if (!ALLOWED_FUNCTIONS.has(name)) {
+    console.error(`[Security] Blocked unknown function: ${name}`)
+    return { error: `Function not allowed: ${name}` }
+  }
 
   // Arguments'ı parse et
   let parsedArgs
@@ -33,7 +80,8 @@ export async function executeFunction(functionCall) {
     try {
       parsedArgs = JSON.parse(args)
     } catch (e) {
-      return `Error: Invalid arguments format - ${e}`
+      // SECURITY: Don't expose parse error details
+      return { error: 'Invalid arguments format' }
     }
   } else {
     parsedArgs = args
@@ -49,7 +97,7 @@ export async function executeFunction(functionCall) {
       case "remove_node":
         return executeRemoveNode(parsedArgs)
       case "add_connection":
-        return executeAddConnection(parsedArgs)
+        return await executeAddConnection(parsedArgs)
       case "get_workflow_info":
         return executeGetWorkflowInfo(parsedArgs)
       case "get_node_info":
@@ -365,7 +413,7 @@ function executeRemoveNode(args) {
   }
 }
 
-function executeAddConnection(args) {
+async function executeAddConnection(args) {
   const {
     sourceNode,
     targetNode,
@@ -379,15 +427,30 @@ function executeAddConnection(args) {
     return "Error: sourceNode and targetNode are required"
   }
 
-  const source = getNodeByName(sourceNode)
-  const target = getNodeByName(targetNode)
+  // Wait a bit for nodes to be fully created and available in DOM
+  let source = getNodeByName(sourceNode)
+  let target = getNodeByName(targetNode)
+  
+  // Retry up to 3 times with delay if nodes not found
+  let retries = 0
+  const maxRetries = 3
+  while ((!source || !target) && retries < maxRetries) {
+    await new Promise(resolve => setTimeout(resolve, 200)) // Wait 200ms
+    source = getNodeByName(sourceNode)
+    target = getNodeByName(targetNode)
+    retries++
+  }
+
+  // Get all nodes for debugging
+  const allNodes = getAllNodes()
+  const nodeNames = allNodes.map(n => n.name || n.id).join(', ')
 
   if (!source) {
-    return `Error: Source node "${sourceNode}" not found`
+    return `Error: Source node "${sourceNode}" not found. Available nodes: ${nodeNames || 'none'}`
   }
 
   if (!target) {
-    return `Error: Target node "${targetNode}" not found`
+    return `Error: Target node "${targetNode}" not found. Available nodes: ${nodeNames || 'none'}`
   }
 
   const success = addConnection(
@@ -611,55 +674,77 @@ function executeSearchNodes(args) {
   try {
     const app = getN8nApp()
     if (!app) {
-      return "Error: Could not access n8n app"
+      // Fallback: Try to get node types from window object
+      console.warn('[SearchNodes] Could not access n8n app, trying fallback methods')
+      
+      // Try Vue store
+      const vueApp = document.querySelector('#app')?.__vue_app__
+      if (vueApp) {
+        const nodeTypes = vueApp.config.globalProperties.$store?.state?.nodeTypes || {}
+        if (Object.keys(nodeTypes).length > 0) {
+          return searchInNodeTypes(nodeTypes, query, limit)
+        }
+      }
+      
+      return "Error: Could not access n8n app. Please ensure you're on a workflow page."
     }
 
     // Get node types from app context
-    const nodeTypes = app._context?.provides?.nodeTypes || {}
-    const queryLower = query.toLowerCase()
-    const results = []
-
-    Object.entries(nodeTypes).forEach(([typeName, nodeType]) => {
-      const name = nodeType.displayName || nodeType.name || typeName
-      const description = nodeType.description || ""
-      
-      // Search in name and description
-      if (
-        name.toLowerCase().includes(queryLower) ||
-        description.toLowerCase().includes(queryLower) ||
-        typeName.toLowerCase().includes(queryLower)
-      ) {
-        results.push({
-          type: typeName,
-          name: name,
-          description: description,
-          group: nodeType.group || "Unknown",
-        })
-      }
-    })
-
-    // Limit results
-    const limitedResults = results.slice(0, limit)
-
-    if (limitedResults.length === 0) {
-      return `No nodes found matching "${query}"`
+    const nodeTypes = app._context?.provides?.nodeTypes || app.$store?.state?.nodeTypes || {}
+    
+    if (!nodeTypes || Object.keys(nodeTypes).length === 0) {
+      return `Error: No node types available. Please ensure you're on a workflow page and n8n is fully loaded.`
     }
 
-    let response = `Found ${results.length} node(s) matching "${query}":\n\n`
-    limitedResults.forEach((node, index) => {
-      response += `${index + 1}. ${node.name} (${node.type})\n`
-      response += `   ${node.description}\n`
-      response += `   Group: ${node.group}\n\n`
-    })
-
-    if (results.length > limit) {
-      response += `... and ${results.length - limit} more. Refine your search for more specific results.`
-    }
-
-    return response
+    return searchInNodeTypes(nodeTypes, query, limit)
   } catch (error) {
+    console.error('[SearchNodes] Error:', error)
     return `Error searching nodes: ${error.message}`
   }
+}
+
+function searchInNodeTypes(nodeTypes, query, limit) {
+  const queryLower = query.toLowerCase()
+  const results = []
+
+  Object.entries(nodeTypes).forEach(([typeName, nodeType]) => {
+    const name = nodeType.displayName || nodeType.name || typeName
+    const description = nodeType.description || ""
+    
+    // Search in name and description
+    if (
+      name.toLowerCase().includes(queryLower) ||
+      description.toLowerCase().includes(queryLower) ||
+      typeName.toLowerCase().includes(queryLower)
+    ) {
+      results.push({
+        type: typeName,
+        name: name,
+        description: description,
+        group: nodeType.group || "Unknown",
+      })
+    }
+  })
+
+  // Limit results
+  const limitedResults = results.slice(0, limit)
+
+  if (limitedResults.length === 0) {
+    return `No nodes found matching "${query}"`
+  }
+
+  let response = `Found ${results.length} node(s) matching "${query}":\n\n`
+  limitedResults.forEach((node, index) => {
+    response += `${index + 1}. ${node.name} (${node.type})\n`
+    response += `   ${node.description}\n`
+    response += `   Group: ${node.group}\n\n`
+  })
+
+  if (results.length > limit) {
+    response += `... and ${results.length - limit} more. Refine your search for more specific results.`
+  }
+
+  return response
 }
 
 /**

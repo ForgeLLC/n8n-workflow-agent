@@ -1961,8 +1961,6 @@ export const allFunctions = [
   removeConnectionFunction,
   cloneNodeFunction,
   searchNodesFunction,
-  findNodeByIntentFunction,
-  getNodeCredentialsFunction,
   getCredentialDetailsFunction,
   getCredentialUsageExamplesFunction,
   bulkUpdateNodesFunction,
