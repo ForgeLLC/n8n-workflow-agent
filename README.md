@@ -1,10 +1,25 @@
-# n8n Agentic Chat
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:12172A,100:F58A1F&height=120&section=header&text=n8n+Workflow+Agent&fontColor=F58A1F&fontSize=36&fontAlignY=38&animation=fadeIn&fontFamily=JetBrains+Mono" width="100%">
+</p>
 
-> **n8n** - Transform your workflow creation with AI-powered agentic assistance
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.6.1-F58A1F?style=flat-square&labelColor=12172A">
+  <img src="https://img.shields.io/badge/language-JavaScript-F7DF1E?style=flat-square&labelColor=12172A&logo=javascript">
+  <img src="https://img.shields.io/badge/platform-Chrome%20Extension-4285F4?style=flat-square&labelColor=12172A&logo=googlechrome&logoColor=4285F4">
+  <img src="https://img.shields.io/badge/license-MIT-F58A1F?style=flat-square&labelColor=12172A">
+  <img src="https://img.shields.io/github/stars/ForgeLLC/n8n-workflow-agent?style=flat-square&color=F58A1F&labelColor=12172A&logo=github">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Chrome Web Store](https://img.shields.io/badge/Chrome-Extension-blue)](https://chrome.google.com/webstore)
-[![Version](https://img.shields.io/badge/version-1.6.1-green)](https://github.com/eros1sh/n8n-workflow-agent)
+<img src="https://capsule-render.vercel.app/api?type=rect&color=0:12172A,50:F58A1F,100:12172A&height=2&section=header" width="100%">
+
+
+
+
+
+
+
+
+
 
 An intelligent Chrome extension that brings **Cursor-style agentic workflow editing** to n8n. Create, modify, analyze, and debug workflows using natural language with multi-step autonomous execution.
 
@@ -155,7 +170,7 @@ An intelligent Chrome extension that brings **Cursor-style agentic workflow edit
 ### Install from Source
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/eros1sh/n8n-workflow-agent.git
+   git clone https://github.com/ForgeLLC/n8n-workflow-agent.git
    cd n8n-workflow-agent
    ```
 
@@ -686,7 +701,7 @@ For each credential:
 - **Language Switching**: AI may occasionally switch languages mid-conversation (rare, fixed in v1.4.2).
 - **Vector Store Credentials**: Vector store connections require manual credential configuration in n8n settings (security best practice).
 
-See [Issues](https://github.com/eros1sh/n8n-workflow-agent/issues) for full list.
+See [Issues](https://github.com/ForgeLLC/n8n-workflow-agent/issues) for full list.
 
 ---
 
@@ -698,7 +713,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for de
 
 1. **Clone the repo:**
    ```bash
-   git clone https://github.com/eros1sh/n8n-workflow-agent.git
+   git clone https://github.com/ForgeLLC/n8n-workflow-agent.git
    cd n8n-workflow-agent
    ```
 
@@ -737,9 +752,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- **Email**: root@eros.sh
-- **Telegram**: @eros_sh
-- **Issues**: [GitHub Issues](https://github.com/eros1sh/n8n-workflow-agent/issues)
+
+- **GitHub**: [ForgeLLC](https://github.com/ForgeLLC)
+- **Issues**: [GitHub Issues](https://github.com/ForgeLLC/n8n-workflow-agent/issues)
 
 ---
 
@@ -762,3 +777,13 @@ If you find this project useful, please consider giving it a star!
 <div align="center">
   <strong>Made with love for the n8n community</strong>
 </div>
+
+<br>
+
+<p align="center">
+  <sub><code>process exited with code 0</code> · <i>built by <a href="https://github.com/ForgeLLC">ForgeLLC</a></i></sub>
+</p>
+
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:12172A,60:7A3A10,100:F58A1F&height=110&section=footer" width="100%">
+</p>
